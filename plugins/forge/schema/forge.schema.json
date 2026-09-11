@@ -1,0 +1,409 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kewi-development/claude-forge/plugins/forge/schema/forge.schema.json",
+  "title": "forge project configuration",
+  "description": "Project-side configuration for the forge plugin, stored at .claude/forge.json. Every value belongs to the project; the plugin ships none of them. Strict JSON, no comments, no unknown keys at any level.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer to this schema for editor support."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Config format version. Currently 1. Bumped only when a key changes meaning."
+    },
+    "taskFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Grep-only working files (lessons, todo, sprint, spokes) and how the session-start injector reads them.",
+      "properties": {
+        "lessons": {
+          "type": "string",
+          "description": "Repo-relative path to the lessons file. Grep-only; must carry a '## Index' section per the Index Contract (D6)."
+        },
+        "todo": {
+          "type": "string",
+          "description": "Repo-relative path to the todo file. Injected item-level (open checkboxes) as the documented exception to index-only injection."
+        },
+        "sprint": {
+          "type": "string",
+          "description": "Repo-relative path to the sprint file."
+        },
+        "spokesDir": {
+          "type": "string",
+          "description": "Repo-relative directory holding hand-rolled per-agent memory spokes (kept alongside native agent memory for one release, D4)."
+        },
+        "caps": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Maximum line counts per file kind. Wrap-up warns when a file exceeds its cap.",
+          "properties": {
+            "lessons": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Line cap for the lessons file (e.g. 400)."
+            },
+            "todo": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Line cap for the todo file (e.g. 1000)."
+            },
+            "sprint": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Line cap for the sprint file (e.g. 100)."
+            },
+            "spoke": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Line cap per memory spoke (e.g. 100)."
+            }
+          }
+        },
+        "injectionBudget": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total bytes the session-start injector may emit across all task files (e.g. 8192). Content beyond the budget is truncated with a notice."
+        },
+        "injectionMode": {
+          "type": "object",
+          "description": "Per-file injection mode. Keys are the taskFiles key names (lessons, todo, sprint) or a spoke path. Values: 'index' (emit the ## Index section), 'open-items' (emit unchecked checkboxes), or 'head-N' (emit the first N lines).",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^(index|open-items|head-[1-9][0-9]*)$"
+          }
+        },
+        "decisionsLog": {
+          "type": "string",
+          "description": "Repo-relative path to the decisions log written by brainstorm and wrap-up."
+        },
+        "auditsDir": {
+          "type": "string",
+          "description": "Repo-relative directory where audit and audit-framework reports are written."
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Branching and merge policy enforced by the guard hooks.",
+      "properties": {
+        "baseBranch": {
+          "type": "string",
+          "description": "Branch PRs target and worktrees start from (e.g. 'main')."
+        },
+        "branchPrefix": {
+          "type": "string",
+          "description": "Prefix for work branches (e.g. 'feat/'). Used by dispatch when naming a unit's branch."
+        },
+        "worktreeDir": {
+          "type": "string",
+          "description": "Directory (relative to the repo or absolute) where worktrees are created."
+        },
+        "draftPrRequired": {
+          "type": "boolean",
+          "description": "When true the pr-create guard denies 'gh pr create' without --draft."
+        },
+        "squashOnly": {
+          "type": "boolean",
+          "description": "When true the merge-gate guard denies any merge that is not a squash merge."
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Command policy: what CI owns, what is slow, how CI and lint run.",
+      "properties": {
+        "ciOwned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Regexes (matched against the lowercased Bash command) for commands CI owns. The ci-owned-command guard denies them locally."
+        },
+        "scopedTestExample": {
+          "type": "string",
+          "description": "Example of a correctly scoped local test command, shown in the ci-owned-command deny reason."
+        },
+        "slow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Regexes for commands that must run in the background. The slow-command hook reminds rather than denies."
+        },
+        "ci": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "How CI is wired, for skills that reason about it.",
+          "properties": {
+            "workflow": {
+              "type": "string",
+              "description": "Workflow file name or path (e.g. '.github/workflows/ci.yml')."
+            },
+            "triggerBranches": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Branches or patterns that trigger CI."
+            },
+            "runner": {
+              "type": "string",
+              "description": "Runner label or description (e.g. 'ubuntu-latest')."
+            },
+            "pathsIgnore": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Path globs CI ignores."
+            }
+          }
+        },
+        "lint": {
+          "type": "string",
+          "description": "The project's lint command."
+        },
+        "deploy": {
+          "type": "string",
+          "description": "Free text describing how deploys happen; may state 'owner-only'."
+        }
+      }
+    },
+    "readDiscipline": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits agents apply to themselves when reading files.",
+      "properties": {
+        "grepOnly": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Globs for files that are never read whole; agents grep then read a range."
+        },
+        "maxDocLines": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum lines an agent reads from a document in one call."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum bytes an agent reads in one call."
+        }
+      }
+    },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which paths the coordinator may edit inline and which must be delegated.",
+      "properties": {
+        "inlineAllow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Globs the coordinator may edit inline without a delegation reminder."
+        },
+        "delegatedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Globs that must be handed to a worker agent."
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "description": "Per-agent overrides keyed by agent name (implementer, bug-fixer, test-writer, reviewer, doc-updater, explorer, or a project agent).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model override passed at dispatch."
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Tool-call budget override. The agent reserves its last 3 calls for the report."
+          },
+          "domainSkills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill names to preload for this agent."
+          },
+          "spoke": {
+            "type": "string",
+            "description": "Repo-relative path to this agent's hand-rolled memory spoke."
+          },
+          "docTargets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "doc-updater only: docs it maintains."
+          },
+          "extraChecks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "reviewer only: extra checks appended to the review checklist."
+          }
+        },
+        "description": "Overrides for one agent. Keys are optional; unset keys fall back to the agent definition."
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One-line stack description and formatter, so the plugin itself stays stack-free.",
+      "properties": {
+        "line": {
+          "type": "string",
+          "description": "One-line stack summary injected at session start."
+        },
+        "formatter": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Formatter invocation for changed files.",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Formatter command; receives file paths as arguments."
+            },
+            "glob": {
+              "type": "string",
+              "description": "Glob of files the formatter applies to."
+            }
+          }
+        }
+      }
+    },
+    "tiers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Risk tiers by path (D17). Sets gates (D18), merge policy (D19), agent budget and review model per tier.",
+      "properties": {
+        "T0": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "T0 docs/bookkeeping: docs, tasks, changelog fragments, comment-only edits. Gates: validators + one reviewer pass per batch. Merge: GitHub auto-merge when required checks are green, owner notified. All keys optional. Highest matching tier wins for a PR.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs matched against repo-relative paths of changed files. A file matching no tier is treated as T2."
+            },
+            "budget": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Tool-call budget for worker agents on units in this tier. Overrides agents.<name>.budget; a prompt override still wins."
+            },
+            "reviewModel": {
+              "type": "string",
+              "description": "Model the reviewer agent uses for units in this tier. Overrides agents.reviewer.model; a prompt override still wins."
+            }
+          }
+        },
+        "T1": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "T1 framework/config: .claude/, hooks, workflows, settings. Gates: hook harness + hook tests + reviewer + CI. Merge: explicit human merge. All keys optional. Highest matching tier wins for a PR.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs matched against repo-relative paths of changed files. A file matching no tier is treated as T2."
+            },
+            "budget": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Tool-call budget for worker agents on units in this tier. Overrides agents.<name>.budget; a prompt override still wins."
+            },
+            "reviewModel": {
+              "type": "string",
+              "description": "Model the reviewer agent uses for units in this tier. Overrides agents.reviewer.model; a prompt override still wins."
+            }
+          }
+        },
+        "T2": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "T2 app code: src, tests, scripts. Gates: implementer, test-writer, reviewer, CI. Merge: explicit human merge. All keys optional. Highest matching tier wins for a PR.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs matched against repo-relative paths of changed files. A file matching no tier is treated as T2."
+            },
+            "budget": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Tool-call budget for worker agents on units in this tier. Overrides agents.<name>.budget; a prompt override still wins."
+            },
+            "reviewModel": {
+              "type": "string",
+              "description": "Model the reviewer agent uses for units in this tier. Overrides agents.reviewer.model; a prompt override still wins."
+            }
+          }
+        },
+        "T3": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "T3 money/auth/data/deploy: payments, webhook signatures, migrations, deploy config. Gates: T2 plus security review plus an owner-facing diff summary. Merge: explicit human merge. All keys optional. Highest matching tier wins for a PR.",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs matched against repo-relative paths of changed files. A file matching no tier is treated as T2."
+            },
+            "budget": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Tool-call budget for worker agents on units in this tier. Overrides agents.<name>.budget; a prompt override still wins."
+            },
+            "reviewModel": {
+              "type": "string",
+              "description": "Model the reviewer agent uses for units in this tier. Overrides agents.reviewer.model; a prompt override still wins."
+            }
+          }
+        }
+      }
+    },
+    "changelog": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Changelog fragments (D21). Each PR adds one fragment; close-out assembles them into the changelog under a dated header and deletes them.",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Repo-relative path of the assembled changelog (e.g. 'CHANGELOG.md')."
+        },
+        "fragmentsDir": {
+          "type": "string",
+          "description": "Repo-relative directory holding per-PR fragments (e.g. 'changelog.d'). Each fragment is <slug>.md with a section name line and one or more bullets."
+        }
+      }
+    }
+  }
+}

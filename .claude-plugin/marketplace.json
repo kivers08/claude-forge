@@ -1,0 +1,24 @@
+{
+  "name": "claude-forge",
+  "owner": {
+    "name": "kewi-development"
+  },
+  "metadata": {
+    "description": "Private marketplace for the forge plugin and its smoke-test plugin.",
+    "version": "0.0.1"
+  },
+  "plugins": [
+    {
+      "name": "forge",
+      "source": "./plugins/forge",
+      "description": "Private coordination framework: guard hooks, worker agents, and workflow skills.",
+      "version": "0.0.1"
+    },
+    {
+      "name": "smoke",
+      "source": "./plugins/smoke",
+      "description": "Throwaway Phase 0 smoke-test plugin.",
+      "version": "0.0.1"
+    }
+  ]
+}

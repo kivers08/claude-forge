@@ -1,0 +1,6 @@
+{
+  "name": "smoke",
+  "version": "0.0.1",
+  "description": "Throwaway Phase 0 smoke test: one skill, one agent, and Node exec-form hooks that prove plugin loading in every row of the matrix.",
+  "author": { "name": "kewi-development" }
+}

@@ -1,0 +1,10 @@
+{
+  "session_id": "0f3c1a2e-win",
+  "transcript_path": "C:\\Users\\owner\\.claude\\projects\\C--Users-owner-proj\\0f3c1a2e-win.jsonl",
+  "cwd": "C:\\Users\\owner\\proj",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "node --version", "description": "Show node version" },
+  "tool_use_id": "toolu_02"
+}

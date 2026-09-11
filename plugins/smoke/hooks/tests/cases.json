@@ -1,0 +1,18 @@
+[
+  { "name": "pre-bash linux appends to smoke.log", "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "expect": { "exit": 0, "stdoutEmpty": true, "fileExists": "smoke.log" } },
+  { "name": "pre-bash windows-shaped cwd", "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-windows.json",
+    "expect": { "exit": 0, "stdoutEmpty": true, "fileExists": "smoke.log" } },
+  { "name": "pre-bash malformed payload fails open", "script": "hooks/pre-bash.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+  { "name": "post-bash returns additionalContext", "script": "hooks/post-bash.js", "payload": "payloads/post-bash-linux.json",
+    "expect": { "exit": 0, "stdoutJson": { "hookSpecificOutput": { "hookEventName": "PostToolUse", "additionalContext": "SMOKE-CONTEXT-4b2d: the smoke plugin post-bash hook injected this sentence after a Bash call." } } } },
+  { "name": "post-bash malformed payload still safe", "script": "hooks/post-bash.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0 } },
+  { "name": "subagent-stop dumps payload", "script": "hooks/subagent-stop.js", "payload": "payloads/subagent-stop-linux.json",
+    "expect": { "exit": 0, "stdoutEmpty": true, "fileExists": "subagentstop.json" } },
+  { "name": "session-start wsl records and announces", "script": "hooks/session-start.js", "payload": "payloads/session-start-wsl.json",
+    "expect": { "exit": 0, "stdoutIncludes": "SMOKE-SESSION-MARKER-2d9f", "fileExists": "session.log" } },
+  { "name": "session-start malformed payload fails open", "script": "hooks/session-start.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutIncludes": "SMOKE-SESSION-MARKER-2d9f" } }
+]

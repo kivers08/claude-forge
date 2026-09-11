@@ -1,0 +1,14 @@
+{
+  "enabledPlugins": {
+    "forge@claude-forge": true,
+    "smoke@claude-forge": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-forge": {
+      "source": {
+        "source": "github",
+        "repo": "kewi-development/claude-forge"
+      }
+    }
+  }
+}

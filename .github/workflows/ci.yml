@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: node --check every .js
+        run: |
+          set -e
+          find plugins scripts -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Node-only manifest and frontmatter validator
+        run: node scripts/validate-plugins.js --strict
+      - name: Hook unit runs (forge)
+        run: node plugins/forge/hooks/tests/run.js
+      - name: Hook unit runs (smoke)
+        run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
+      - name: LF line endings enforced
+        run: |
+          if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then
+            echo "CRLF found"; exit 1
+          fi
+      - name: claude plugin validate --strict (if CLI installs)
+        continue-on-error: true
+        run: |
+          if npm install -g @anthropic-ai/claude-code >/dev/null 2>&1; then
+            claude plugin validate . --strict
+            for p in plugins/*/; do claude plugin validate "$p" --strict; done
+          else
+            echo "claude CLI not installable in CI; Node validator is authoritative"
+          fi

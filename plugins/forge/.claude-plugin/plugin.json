@@ -1,0 +1,7 @@
+{
+  "name": "forge",
+  "version": "0.0.1",
+  "description": "Private coordination framework: guard hooks, worker agents, and workflow skills for the owner's projects.",
+  "author": { "name": "kewi-development" },
+  "keywords": ["hooks", "agents", "workflow"]
+}

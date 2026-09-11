@@ -1,0 +1,14 @@
+{
+  "session_id": "0f3c1a2e-linux",
+  "transcript_path": "/home/owner/.claude/projects/-home-owner-proj/0f3c1a2e-linux.jsonl",
+  "cwd": "/home/owner/proj",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "def456",
+  "agent_type": "smoke-agent",
+  "agent_transcript_path": "/home/owner/.claude/projects/-home-owner-proj/0f3c1a2e-linux/subagents/agent-def456.jsonl",
+  "last_assistant_message": "### SMOKE REPORT\nmarker: FORGE-MARKER-7f3a",
+  "background_tasks": [],
+  "session_crons": []
+}

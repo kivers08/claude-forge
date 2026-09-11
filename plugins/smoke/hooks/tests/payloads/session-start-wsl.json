@@ -1,0 +1,8 @@
+{
+  "session_id": "0f3c1a2e-wsl",
+  "transcript_path": "/home/owner/.claude/projects/-mnt-c-Users-owner-proj/0f3c1a2e-wsl.jsonl",
+  "cwd": "/mnt/c/Users/owner/proj",
+  "permission_mode": "default",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

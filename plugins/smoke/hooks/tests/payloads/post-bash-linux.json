@@ -1,0 +1,11 @@
+{
+  "session_id": "0f3c1a2e-linux",
+  "transcript_path": "/home/owner/.claude/projects/-home-owner-proj/0f3c1a2e-linux.jsonl",
+  "cwd": "/home/owner/proj",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "node --version" },
+  "tool_response": { "stdout": "v22.22.2\n", "stderr": "", "interrupted": false },
+  "tool_use_id": "toolu_01"
+}
