@@ -17,8 +17,8 @@ jobs:
     # Variables when kewi-dev is up, flip it back if it goes down.
     runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
       - name: node --check every .js
@@ -66,8 +66,8 @@ jobs:
     name: forge validators
     runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
       - name: manifest/frontmatter + changelog fragment validators
@@ -97,10 +97,10 @@ jobs:
     # an unbounded hang here would block every other CI job on that runner.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
       - name: reviewer clean (dispatch forge:reviewer, post commit status)
