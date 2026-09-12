@@ -1,1 +1,0 @@
-- [Smoke run log](smoke_run.md) — 2026-09-12 confirmation that memory writes work (SMOKE-MEMORY-MARKER-a774)
