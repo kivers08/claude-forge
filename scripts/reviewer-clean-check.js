@@ -31,6 +31,9 @@ function log(msg) {
   console.log(`reviewer clean: ${msg}`);
 }
 
+// Never rejects: a transient failure to POST the status (network blip, API
+// hiccup) must not crash main() and turn an actual clean/failed review into
+// a misreported process crash — every call site relies on this resolving.
 function postStatus(state, description) {
   const repo = process.env.GITHUB_REPOSITORY;
   const sha = process.env.PR_HEAD_SHA;
@@ -58,7 +61,11 @@ function postStatus(state, description) {
       Accept: 'application/vnd.github+json',
     },
   };
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    const fail = (e) => {
+      log(`could not post status ${state}: ${e.message}`);
+      resolve();
+    };
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
@@ -67,11 +74,11 @@ function postStatus(state, description) {
           log(`posted status ${state} (HTTP ${res.statusCode})`);
           resolve();
         } else {
-          reject(new Error(`GitHub statuses API returned HTTP ${res.statusCode}: ${data}`));
+          fail(new Error(`GitHub statuses API returned HTTP ${res.statusCode}: ${data}`));
         }
       });
     });
-    req.on('error', reject);
+    req.on('error', fail);
     req.write(body);
     req.end();
   });
@@ -79,11 +86,7 @@ function postStatus(state, description) {
 
 async function skip(reason) {
   log(`skipped (${reason})`);
-  try {
-    await postStatus('success', `skipped: ${reason}`);
-  } catch (e) {
-    log(`could not post skip status: ${e.message}`);
-  }
+  await postStatus('success', `skipped: ${reason}`);
   process.exit(0);
 }
 
@@ -150,13 +153,19 @@ async function main() {
   const args = [
     '-p', prompt,
     '--append-system-prompt', systemPrompt,
-    // Explicit read-only git subcommands only — not `Bash(git *)`. The
-    // reviewed diff is untrusted content; a prompt injection in it
-    // shouldn't be able to walk this into `git push`/`git commit`/`git
-    // config`/etc. This runner has ambient git credentials for other CI
-    // jobs, so a mutating git command could still succeed even without
-    // GITHUB_TOKEN in this process's own env.
-    '--allowedTools', 'Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)',
+    // --restricted confines Read/Glob/Grep (and every other file tool) to
+    // --add-dir's working directories and strips Bash/WebFetch/etc. unless
+    // named in --tools — --allowedTools alone only scoped Bash, leaving
+    // Read/Glob/Grep able to reach anywhere the runner's own user can (e.g.
+    // ~/.ssh, ~/.aws), which a prompt injection in the untrusted PR diff
+    // could exploit on this persistent self-hosted runner. --tools then
+    // re-grants exactly the same read-only git subcommands as before — not
+    // `Bash(git *)`, so the diff still can't walk this into `git
+    // push`/`git commit`/`git config`/etc. (this runner has ambient git
+    // credentials for other CI jobs, so a mutating command could succeed
+    // even without GITHUB_TOKEN in this process's own env).
+    '--restricted', '--add-dir', ROOT,
+    '--tools', 'Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)',
     '--output-format', 'json',
   ];
   // Explicit minimal env: the reviewed diff is untrusted PR content and the
