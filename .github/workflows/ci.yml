@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '22.x'
       - name: node --check every .js
         run: |
           set -e
@@ -69,7 +69,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '22.x'
       - name: manifest/frontmatter + changelog fragment validators
         run: |
           node scripts/validate-plugins.js --strict
@@ -102,7 +102,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '22.x'
       - name: reviewer clean (dispatch forge:reviewer, post commit status)
         env:
           CORP_RUNNER: ${{ vars.CORP_RUNNER }}
