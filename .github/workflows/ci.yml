@@ -41,7 +41,12 @@ jobs:
       - name: claude plugin validate --strict (if CLI installs)
         continue-on-error: true
         run: |
-          if npm install -g @anthropic-ai/claude-code >/dev/null 2>&1; then
+          # Skip the (re)install when claude is already on PATH — true on
+          # the persistent self-hosted runner, where reviewer-clean already
+          # depends on it being present and authenticated. Avoids a
+          # redundant npm-registry round-trip on every single run; still
+          # installs it fresh on the GitHub-hosted fallback where it isn't.
+          if command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code >/dev/null 2>&1; then
             claude plugin validate . --strict
             for p in plugins/*/; do claude plugin validate "$p" --strict; done
           else
