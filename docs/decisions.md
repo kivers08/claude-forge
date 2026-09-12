@@ -276,15 +276,25 @@ gate, not a claim that A/B are satisfied. `phase0-results.md`'s matrix should
 be corrected with the actual row this new cloud session corresponds to (or a
 new row added) once that's confirmed.
 
-**Row D partially run, same day:** an already-open session on the owner's dev
-VPS (Remote Control from the Android app) checked in. `CLAUDE_CODE_REMOTE` was
-unset there, so `.claude/hooks/session-start.sh`'s auto-install never fires on
-this machine (that variable is Anthropic-cloud-specific, not set by
-Remote-Control-to-a-persistent-box) — check 6 is n/a for row D, consistent
-with D24's "persistent machines only need a one-time manual install"
-reasoning. Manual `claude plugin install` for both plugins worked (check 1
-PASS), but neither plugin's hooks/agents/skills loaded into that
-already-running session afterward, confirming D24's original mid-session-load
-concern for this specific path. Checks 2–5 and 7–11 still need a restart of
-that session to confirm; rows A and B remain fully unrun. See
-`phase0-results.md`'s "Row D partial run" note for detail.
+**Row D complete except a literal restart, same day:** an already-open session
+on the owner's dev VPS (Remote Control from the Android app) checked in.
+`CLAUDE_CODE_REMOTE` was unset there, so `.claude/hooks/session-start.sh`'s
+auto-install never fires on this machine (that variable is
+Anthropic-cloud-specific, not set by Remote-Control-to-a-persistent-box) —
+check 6 is n/a for row D, consistent with D24's "persistent machines only
+need a one-time manual install" reasoning. Manual `claude plugin install` for
+both plugins worked (check 1 PASS), but neither plugin's hooks/agents/skills
+loaded into that already-running session afterward, confirming D24's original
+mid-session-load concern for this specific path.
+
+Checks 2–5 and 7–11 were then run via independent headless `claude -p`
+subprocesses (the same method C0 used), since the live session can't restart
+itself mid-conversation. All passed. Rows A and B remain fully unrun. See
+`phase0-results.md`'s "Row D partial run" and "Row D agent-dispatch findings"
+notes for full detail, including a real safety finding surfaced along the
+way: this VPS has `permissions.defaultMode: "auto"` set globally in
+`~/.claude/settings.json`, so a headless smoke-agent dispatch committed and
+pushed a stray commit to `claude/units` entirely on its own initiative
+(nothing in the agent's definition asked for this) — cleaned up with a
+follow-up commit, but the underlying auto-approval setting is unchanged and
+is an owner decision, not a forge issue.
