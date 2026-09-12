@@ -264,3 +264,40 @@ unit (U2) does not depend on HOW the plugin is delivered to a session, only on
 hook behaviour already proven by Phase 0 checks 4, 5 and 11 in row C0. U2 builds
 now. Rows A–D still gate U3+ and still decide D4 (native memory off by default
 in cloud) and D24.
+
+## Addendum 2026-09-12: branch protection, drafted not applied
+
+### D26 — Branch-protection ruleset for `main` (draft, owner sign-off required before applying)
+Owner wants merges to `main` gated on: a code check, a quality check, a full CI
+run, and a PR review passing. Not applied yet — a ruleset that requires checks
+which don't exist would deadlock every PR, and this repo is still pre-U3/U4
+(rows A, B, D of Phase 0 are the current gate; see D25).
+
+Two-phase plan:
+
+**Phase now** (could be applied today if the owner authorizes it; needs nothing
+from U3/U4):
+- Require the existing CI `validate` job (`.github/workflows/ci.yml`) to pass.
+- Require at least 1 approving human PR review before merge.
+- Require the PR branch to be up to date with `main` before merging.
+- Block force-pushes and branch deletion on `main`.
+- No direct pushes to `main` — PRs only.
+
+**Phase later** (once U3/U4 land):
+- Add the `forge validators` check (D20: schema, index contract, fragments,
+  framework-block drift) as a required status check.
+- Add the `reviewer clean` commit status (from the U4 reviewer agent) as a
+  required check.
+- Revisit whether the human-approval requirement stays alongside the reviewer
+  agent or is relaxed for T0-tier changes per D19's auto-merge exception.
+
+"Quality check" in the owner's ask has no fixed meaning yet — today's CI already
+runs lint-equivalent steps (`node --check`, the manifest/frontmatter validator,
+LF enforcement); GitHub's own paid Code Quality/Advanced Security products were
+explicitly declined (2026-09-12, cost in Actions minutes plus GHAS licensing).
+"Quality check" for now means CI's existing steps, not a new product.
+
+Not created: creating or editing a GitHub ruleset is a live change to how ALL
+future PRs merge, so it needs an explicit owner go-ahead, applied outside a PR
+(rulesets aren't repo file content — no diff for a human reviewer to approve
+the way code changes work).
