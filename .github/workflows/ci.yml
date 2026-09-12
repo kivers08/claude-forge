@@ -50,10 +50,13 @@ jobs:
 
   forge-validators:
     # D20/D21 required status check "forge validators": deterministic,
-    # no judgment calls, fails the build on any problem. Self-hosted only
-    # for now (same CORP_RUNNER gate as `validate` above) — on the
-    # GitHub-hosted fallback it reports a graceful skip instead of failing,
-    # same pattern as the "claude plugin validate --strict" step above.
+    # no judgment calls, fails the build on any problem. Unlike
+    # `reviewer-clean` below, neither check this job runs needs the
+    # self-hosted machine — both are pure Node with no external CLI/auth
+    # dependency — so, unlike `reviewer-clean`, this job always runs both
+    # checks regardless of which runner it lands on; gating a required,
+    # deterministic check behind runner availability would let it silently
+    # no-op on the exact fallback path it exists to still catch problems on.
     # Deliberately reruns `validate-plugins.js --strict` (already run,
     # unconditionally, in the `validate` job above) alongside the new
     # changelog fragment shape check (D21) that `validate` does not run —
@@ -68,18 +71,7 @@ jobs:
         with:
           node-version: 20
       - name: manifest/frontmatter + changelog fragment validators
-        env:
-          CORP_RUNNER: ${{ vars.CORP_RUNNER }}
         run: |
-          # Case-insensitive compare: the CORP_RUNNER repo/org variable has
-          # been observed set as "TRUE" (uppercase). GitHub Actions' own
-          # `vars.CORP_RUNNER == 'true'` expression (used for `runs-on`
-          # above) is case-insensitive; this shell comparison must match
-          # that or it silently no-ops on a runner it's actually on.
-          if [ "$(printf '%s' "$CORP_RUNNER" | tr '[:upper:]' '[:lower:]')" != "true" ]; then
-            echo "forge validators: skipped, self-hosted runner (CORP_RUNNER) not available on this run"
-            exit 0
-          fi
           node scripts/validate-plugins.js --strict
           node scripts/validate-changelog.js
 

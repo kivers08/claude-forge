@@ -6,11 +6,9 @@
 // On-demand only (run by a human or an agent explicitly invoking it) — not
 // wired into CI or a git hook. Full automation is D22, still deferred.
 //
-// Fragment shape (see changelog.d/README.md):
-//   section: Added | Changed | Fixed | Removed | Docs
-//   - one bullet per change, present tense, no PR number needed
-// A fragment may contain more than one `section:` block, blank-line
-// separated. Bullet continuation lines are indented.
+// Fragment shape (see changelog.d/README.md): parsing itself lives in
+// scripts/lib/changelog-fragment.js, shared with validate-changelog.js so
+// "malformed" means the same thing in both places.
 //
 // Refuses to run (exit 1, no changes made) if there are zero fragments to
 // assemble, or if any fragment is malformed.
@@ -19,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { parseFragment, listFragmentFiles } = require('./lib/changelog-fragment');
 
 const ROOT = path.resolve(__dirname, '..');
 const FRAGMENTS_DIR = path.join(ROOT, 'changelog.d');
@@ -28,74 +27,7 @@ function rel(p) {
   return path.relative(ROOT, p).split(path.sep).join('/');
 }
 
-// ---- fragment parsing -------------------------------------------------------
-// Returns { sections: [{ name, bullets: [string] }], errors: [string] } for
-// one fragment file. `sections` preserves first-encountered order within the
-// fragment. On any shape error, `errors` is non-empty and `sections` may be
-// incomplete — callers must check errors before using sections.
-function parseFragment(file) {
-  const text = fs.readFileSync(file, 'utf8');
-  const lines = text.split('\n');
-  const errors = [];
-  const sections = [];
-  let current = null; // { name, bullets }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const lineNo = i + 1;
-    if (!line.trim()) continue;
-
-    const sectionMatch = /^section:\s*(.+)$/.exec(line);
-    const bulletMatch = /^-\s+(.+)$/.exec(line);
-    const continuationMatch = /^\s+\S/.test(line);
-
-    if (sectionMatch) {
-      const name = sectionMatch[1].trim();
-      if (!name) {
-        errors.push(`${rel(file)}:${lineNo}: empty section name`);
-        continue;
-      }
-      current = { name, bullets: [] };
-      sections.push(current);
-    } else if (bulletMatch) {
-      if (!current) {
-        errors.push(`${rel(file)}:${lineNo}: bullet before any "section:" line`);
-        continue;
-      }
-      current.bullets.push(bulletMatch[1].trim());
-    } else if (continuationMatch) {
-      if (!current || current.bullets.length === 0) {
-        errors.push(`${rel(file)}:${lineNo}: continuation line with no preceding bullet`);
-        continue;
-      }
-      current.bullets[current.bullets.length - 1] += ' ' + line.trim();
-    } else {
-      errors.push(`${rel(file)}:${lineNo}: unrecognized line (expected "section:", "- bullet", or an indented continuation): ${JSON.stringify(line)}`);
-    }
-  }
-
-  if (sections.length === 0 && errors.length === 0) {
-    errors.push(`${rel(file)}: no "section:" block found`);
-  }
-  for (const s of sections) {
-    if (s.bullets.length === 0) {
-      errors.push(`${rel(file)}: section "${s.name}" has no bullets`);
-    }
-  }
-
-  return { sections, errors };
-}
-
 // ---- assembly ----------------------------------------------------------------
-function listFragmentFiles() {
-  if (!fs.existsSync(FRAGMENTS_DIR)) return [];
-  return fs
-    .readdirSync(FRAGMENTS_DIR)
-    .filter((f) => f !== 'README.md' && f.endsWith('.md'))
-    .sort()
-    .map((f) => path.join(FRAGMENTS_DIR, f));
-}
-
 function todayDate() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -127,13 +59,13 @@ function prependToChangelog(datedSection) {
 }
 
 function main() {
-  const files = listFragmentFiles();
+  const files = listFragmentFiles(FRAGMENTS_DIR);
   if (files.length === 0) {
     console.log('nothing to assemble: changelog.d/ has no fragments (only README.md, if present)');
     process.exit(1);
   }
 
-  const parsed = files.map((f) => ({ file: f, ...parseFragment(f) }));
+  const parsed = files.map((f) => ({ file: f, ...parseFragment(f, ROOT) }));
   const allErrors = parsed.flatMap((p) => p.errors);
   if (allErrors.length > 0) {
     console.error('refusing to assemble: one or more fragments are malformed.');
