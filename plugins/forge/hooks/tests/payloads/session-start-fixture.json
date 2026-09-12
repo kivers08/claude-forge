@@ -1,0 +1,7 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-000000000007",
+  "cwd": "{{CWD}}",
+  "permission_mode": "default",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

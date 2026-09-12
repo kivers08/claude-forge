@@ -229,3 +229,38 @@ changed, what verified it, risks.
 ### D23 — Measure before adding
 Telemetry (D10) plus tokens-per-unit and review-findings-per-unit; skill
 evals; prune what shows no measured effect.
+
+## Addendum 2026-09-11b: cloud loading and U2 sequencing
+
+### D24 — Cloud plugin loading: environment setup script
+Option 1 from `phase0-results.md` is chosen. Cloud environments run, before each
+session:
+
+    claude plugin marketplace add kewi-development/claude-forge
+    claude plugin install forge@claude-forge
+
+This is environment-side configuration, not repo content: no vendoring, no
+duplicate copy of the plugin per project, and the plugin stays a single source
+of truth. Requires the cloud environment's git credentials to reach the private
+repo (the clone worked in the Phase 0 container).
+
+Rejected and why:
+- `CLAUDE_CODE_PLUGIN_SEED_DIR` image seeding: same shape, but goes stale unless
+  the image is rebuilt on every forge release.
+- Vendored `.claude/vendor/forge/`: works everywhere with no install step, but
+  duplicates the plugin into every project and adds a sync step per release.
+  Kept as the documented fallback if D24 fails on a real cloud row.
+- SessionStart install hook: untested, and a plugin installed mid-session
+  probably does not load its hooks or agents until restart.
+
+Project `.claude/settings.json` keeps `extraKnownMarketplaces` and
+`enabledPlugins`: the marketplace registration IS honored from project settings
+(Phase 0 check 6), and persistent machines (rows A, B, D) still only need a
+one-time `claude plugin install`.
+
+### D25 — U2 proceeds in parallel with the remaining Phase 0 rows
+D16 made Phase 0 block the real build. Narrow exception, owner-decided: the hook
+unit (U2) does not depend on HOW the plugin is delivered to a session, only on
+hook behaviour already proven by Phase 0 checks 4, 5 and 11 in row C0. U2 builds
+now. Rows A–D still gate U3+ and still decide D4 (native memory off by default
+in cloud) and D24.

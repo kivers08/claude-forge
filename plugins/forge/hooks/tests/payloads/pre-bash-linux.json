@@ -1,0 +1,10 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-000000000001",
+  "prompt_id": "p-0001",
+  "transcript_path": "/root/.claude/projects/-home-user-project/5f0b1c2a.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "{{COMMAND}}", "description": "recorded linux bash call" }
+}

@@ -1,0 +1,8 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-000000000008",
+  "cwd": "/mnt/c/Users/owner/project",
+  "transcript_path": "/home/owner/.claude/projects/-mnt-c-Users-owner-project/5f0b1c2a.jsonl",
+  "permission_mode": "default",
+  "hook_event_name": "SessionStart",
+  "source": "resume"
+}

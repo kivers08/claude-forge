@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "git": { "baseBranch": "main", "draftPrRequired": true, "squashOnly": true },
+  "commands": {
+    "ciOwned": ["^npm\\s+test$", "^npm\\s+run\\s+build$"],
+    "scopedTestExample": "npm test -- path/to/one.test.js",
+    "slow": ["^npm\\s+run\\s+e2e"]
+  },
+  "delegation": {
+    "inlineAllow": ["docs/**", "changelog.d/**"],
+    "delegatedPaths": ["src/**"]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-00000000000a",
+  "cwd": "{{CWD}}",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": true
+}

@@ -1,1 +1,258 @@
-[]
+[
+  { "name": "pr-create: denies gh pr create without --draft",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "gh pr create --title 'U2 hooks' --body 'see changelog'",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "always opened as drafts" } },
+
+  { "name": "pr-create: allows gh pr create --draft",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "gh pr create --draft --title 'U2 hooks'",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "pr-create: quoted mention is not a pr create",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo \"remember to run gh pr create later\"",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "pr-create: windows-shaped cwd behaves the same",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-windows.json",
+    "command": "gh pr create --title x",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "always opened as drafts" } },
+
+  { "name": "pr-create: draftPrRequired false disables the guard",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/draft-off", "command": "gh pr create --title x",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "git-refspec: denies a bare branch refspec",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "git push origin claude/plugin-dev-progress-28k9c7",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "bare refspec" } },
+
+  { "name": "git-refspec: allows git push -u origin <branch>",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "git push -u origin claude/plugin-dev-progress-28k9c7",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "git-refspec: allows an explicit src:dst refspec",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "git push origin HEAD:refs/heads/feature",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "git-refspec: allows a bare git push",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "git push",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "git-refspec: allows a branch delete",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "git push origin --delete stale-branch",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "csv-parse: denies awk -F, on a csv",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "awk -F, '{print $2}' exports/jobs.csv",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "quoted fields" } },
+
+  { "name": "csv-parse: denies cut -d, on a csv",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cut -d, -f3 data/customers.csv",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "quoted fields" } },
+
+  { "name": "csv-parse: leaves awk on a non-csv alone",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "awk -F, '{print $1}' notes.txt",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "user-level-write: denies a redirect into ~/.claude",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo '{}' > ~/.claude/settings.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: denies cp into $HOME/.claude",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cp agents/reviewer.md $HOME/.claude/agents/reviewer.md",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: project .claude is fine",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured",
+    "command": "echo '{}' > .claude/forge.json",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "user-level-write: reading ~/.claude is not a write",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cat ~/.claude/settings.json",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "user-level-write: Write tool into ~/.claude is denied",
+    "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
+    "filePath": "{{HOME}}/.claude/settings.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: Write tool into the project is allowed",
+    "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
+    "filePath": "/home/user/project/.claude/forge.json",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "ci-owned-command: denies a command CI owns",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "npm test",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "npm test -- path/to/one.test.js" } },
+
+  { "name": "ci-owned-command: a scoped test is allowed",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "npm test -- src/app.test.js",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "ci-owned-command: no config means no guard",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "npm test",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "slow-command: reminds without denying",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "npm run e2e",
+    "expect": { "exit": 0, "deny": false, "stdoutIncludes": "Run it in the background" } },
+
+  { "name": "delegation: reminds on an inline write to a delegated path",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "echo 'x' >> src/app.js",
+    "expect": { "exit": 0, "deny": false, "stdoutIncludes": "delegation.inlineAllow" } },
+
+  { "name": "delegation: silent on an allowed inline path",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "echo 'x' >> docs/notes.md",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "merge-gate: denies gh pr merge with no marker",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "command": "gh pr merge 7 --squash",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "no claude-human-merge-ok marker" } },
+
+  { "name": "merge-gate: denies on a stale marker",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "mergeMarkerMinutes": 45, "command": "gh pr merge 7 --squash",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "minutes old" } },
+
+  { "name": "merge-gate: allows a squash merge with a fresh marker",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "mergeMarkerMinutes": 1, "command": "gh pr merge 7 --squash",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "merge-gate: fresh marker still denies a non-squash merge",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "mergeMarkerMinutes": 1, "command": "gh pr merge 7 --merge",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "squash-merge" } },
+
+  { "name": "merge-gate: git merge into a feature branch is not gated",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "branch": "feat/x", "command": "git merge origin/main",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "merge-gate: git merge on the base branch is gated",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "command": "git merge feat/x",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "merge-gate" } },
+
+  { "name": "merge-gate: MCP merge with no marker is denied",
+    "script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json",
+    "git": true, "command": "squash",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "GitHub MCP server" } },
+
+  { "name": "merge-gate: MCP squash merge with a fresh marker is allowed",
+    "script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json",
+    "git": true, "mergeMarkerMinutes": 2, "command": "squash",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "merge-gate: MCP merge without merge_method is not a squash",
+    "script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json",
+    "git": true, "mergeMarkerMinutes": 2, "command": "merge",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "squash-merge" } },
+
+  { "name": "worktree-commit: a normal commit is allowed",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "branch": "feat/x", "command": "git commit -m 'work'",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "rules injector: injects a matching block-form rule",
+    "script": "hooks/post-bash-rules.js", "payload": "payloads/post-bash-fixture.json",
+    "fixture": "fixtures/rules", "command": "sed -i 's/a/b/' src/payments/charge.js",
+    "expect": { "exit": 0, "stdoutIncludes": "FORGE-RULE-PAYMENTS" } },
+
+  { "name": "rules injector: injects a matching flow-form rule",
+    "script": "hooks/post-bash-rules.js", "payload": "payloads/post-bash-fixture.json",
+    "fixture": "fixtures/rules", "command": "node --check src/webhooks/square.js",
+    "expect": { "exit": 0, "stdoutIncludes": "FORGE-RULE-WEBHOOKS" } },
+
+  { "name": "rules injector: silent when no path matches",
+    "script": "hooks/post-bash-rules.js", "payload": "payloads/post-bash-fixture.json",
+    "fixture": "fixtures/rules", "command": "ls -la",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "rules injector: silent when the project has no rules dir",
+    "script": "hooks/post-bash-rules.js", "payload": "payloads/post-bash-fixture.json",
+    "fixture": "fixtures/configured", "command": "cat src/app.js",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "session-start: injects index and open items",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/tasks",
+    "expect": { "exit": 0, "stdoutIncludes": "LESSON-REFSPEC", "stdoutExcludes": "U1 skeleton", "fileExists": "telemetry.jsonl" } },
+
+  { "name": "session-start: names the stack line",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/tasks",
+    "expect": { "exit": 0, "stdoutIncludes": "Express middleware" } },
+
+  { "name": "session-start: wsl path with no config stays quiet",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-wsl.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "stop git-check: blocks on uncommitted work",
+    "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
+    "git": true, "branch": "feat/x", "dirty": ["src/app.js"],
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "uncommitted changes" } },
+
+  { "name": "stop git-check: clean tree on the base branch passes",
+    "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
+    "git": true,
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "stop git-check: does not block twice in a row",
+    "script": "hooks/stop-git-check.js", "payload": "payloads/stop-loop-guard.json",
+    "git": true, "dirty": ["src/app.js"],
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "telemetry: records a Skill invocation",
+    "script": "hooks/telemetry.js", "payload": "payloads/telemetry-skill.json",
+    "expect": { "exit": 0, "stdoutEmpty": true, "fileExists": "telemetry.jsonl" } },
+
+  { "name": "fail open: pre-bash on a malformed payload",
+    "script": "hooks/pre-bash.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "fail open: pre-write on a malformed payload",
+    "script": "hooks/pre-write.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "fail CLOSED: pre-merge-mcp denies when the payload is unreadable",
+    "script": "hooks/pre-merge-mcp.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "no merge marker could be read" } },
+
+  { "name": "fail open: post-bash-rules on a malformed payload",
+    "script": "hooks/post-bash-rules.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "fail open: stop git-check on a malformed payload",
+    "script": "hooks/stop-git-check.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "fail open: session-start on a malformed payload",
+    "script": "hooks/session-start.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0 } },
+
+  { "name": "fail open: telemetry on a malformed payload",
+    "script": "hooks/telemetry.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } }
+]

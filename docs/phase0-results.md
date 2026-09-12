@@ -114,7 +114,7 @@ Consequence if row C confirms: the "clone the repo and the plugin is just
 there" model does not hold for fresh cloud containers. Persistent machines
 (rows A, B, D) only need a one-time `claude plugin install` per machine.
 
-Options for cloud (owner decision, not chosen here):
+Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
 1. Cloud environment setup script runs
    `claude plugin marketplace add kewi-development/claude-forge && claude plugin install forge@claude-forge`
    before each session. Environment-side, not repo-side; no vendoring. Needs
@@ -129,6 +129,12 @@ Options for cloud (owner decision, not chosen here):
 4. A project SessionStart hook that runs the install commands. Untested;
    hooks and agents from a plugin installed mid-session probably do not load
    until restart, so this likely covers skills only.
+
+**Chosen: option 1 (D24).** The cloud environment runs
+`claude plugin marketplace add kewi-development/claude-forge && claude plugin
+install forge@claude-forge` before each session. Option 3 (vendoring) stays the
+documented fallback if a real cloud row shows option 1 failing. Row C still runs
+— it decides whether check 6 fails as predicted, and whether auto memory is on.
 
 ### Why the real row C could not run from this session
 

@@ -1,0 +1,10 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-000000000002",
+  "prompt_id": "p-0002",
+  "transcript_path": "C:\\Users\\owner\\.claude\\projects\\C--Users-owner-project\\5f0b1c2a.jsonl",
+  "cwd": "C:\\Users\\owner\\project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "{{COMMAND}}", "description": "recorded windows-shaped bash call" }
+}

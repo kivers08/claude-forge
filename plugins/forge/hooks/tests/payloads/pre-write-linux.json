@@ -1,0 +1,8 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-000000000004",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": { "file_path": "{{FILE_PATH}}", "content": "x" }
+}

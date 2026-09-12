@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "stack": { "line": "Node 20 + Express middleware" },
+  "taskFiles": {
+    "lessons": "tasks/lessons.md",
+    "todo": "tasks/todo.md",
+    "caps": { "lessons": 400, "todo": 1000 },
+    "injectionBudget": 4096,
+    "injectionMode": { "lessons": "index", "todo": "open-items" }
+  }
+}

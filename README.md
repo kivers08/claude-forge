@@ -47,6 +47,20 @@ on folder trust:
 Then run `/forge:bootstrap` to scaffold the project's thin layer
 (`.claude/forge.json`, `forge.md`, CLAUDE.md framework block, rules).
 
+## Cloud sessions
+
+Project `enabledPlugins` registers the marketplace but does NOT install the
+plugin in a fresh cloud container (Phase 0 check 6). Per D24, the cloud
+environment's setup script must run, before each session:
+
+```
+claude plugin marketplace add kewi-development/claude-forge
+claude plugin install forge@claude-forge
+```
+
+Persistent machines (dev box, WSL2, VPS) need that install once, not per
+session.
+
 ## Development
 
 ```
