@@ -26,7 +26,7 @@ Claude Code in C0: 2.1.268, Node v22.22.2, Linux, running as root,
 | 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | |
 | 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | |
 | 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | |
-| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | | n/a |
+| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL, confirms the C0 simulation (see below) | n/a |
 | 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | |
 | 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | |
 | 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | |
@@ -135,6 +135,42 @@ Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
 install forge@claude-forge` before each session. Option 3 (vendoring) stays the
 documented fallback if a real cloud row shows option 1 failing. Row C still runs
 — it decides whether check 6 fails as predicted, and whether auto memory is on.
+
+### Row C confirmed, 2026-09-12 (real Android cloud session)
+
+A real cloud session started from the Android app, based on `main` (which
+already has `.claude/settings.json` with `enabledPlugins`/
+`extraKnownMarketplaces` from this PR). Confirms the C0 simulation exactly:
+`/root/.claude/plugins/installed_plugins.json` was `{"version":2,"plugins":{}}`
+and `claude plugin marketplace list` reported "No marketplaces configured" —
+neither plugin's hooks (session-start, guards, telemetry) ran for this
+session. Check 6 is FAIL on row C, not just "likely."
+
+Fixed for this session by hand:
+`claude plugin marketplace add kewi-development/claude-forge`, then
+`claude plugin install forge@claude-forge` and `...smoke@claude-forge`
+(both installed cleanly at user scope from `main`, commit `53116bc`).
+
+Went with option 4 instead of the chosen D24 option 1 (owner decision, made
+interactively in this session): a project-committed `.claude/hooks/session-start.sh`,
+registered as a top-level `SessionStart` hook in `.claude/settings.json`
+(distinct from the plugins' own `hooks.json`), running the same
+marketplace-add + plugin-install commands, guarded by `$CLAUDE_CODE_REMOTE`.
+Verified idempotent (`claude plugin install` no-ops with "already installed"
+on a second run) and that the script exits 0 both with and without the
+remote guard set. Preferred over option 1 (environment-side setup script)
+because it is versioned with the repo and needs no per-environment
+configuration outside it.
+
+**Still unverified — flagged, not resolved:** D24 rejected the SessionStart-hook
+approach as "untested... a plugin installed mid-session probably does not
+load its hooks or agents until restart." This project-level hook runs earlier
+(before the session's tool loop starts, not mid-session), so it may not have
+that problem, but this session could not prove it either way — the hook
+didn't exist yet when this session's own SessionStart already fired. Needs a
+genuinely fresh session on this branch (or on `main` after merge) checking
+whether `forge`'s and `smoke`'s own SessionStart context/hooks are live from
+turn one, with no manual install.
 
 ### Why the real row C could not run from this session
 

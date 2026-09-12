@@ -7,7 +7,15 @@ on:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # Runs on the org's self-hosted corp runner (kewi-dev: self-hosted, Linux,
+    # X64, dev; runner group Default) when the CORP_RUNNER repo/org variable
+    # is set to "true"; otherwise falls back to GitHub-hosted. Actions has no
+    # built-in way to detect at trigger time whether a self-hosted runner is
+    # actually online (querying runner liveness needs an org-admin-scoped
+    # token the default GITHUB_TOKEN doesn't have), so this variable is the
+    # manual switch: flip it in Settings > Secrets and variables > Actions >
+    # Variables when kewi-dev is up, flip it back if it goes down.
+    runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,6 +31,8 @@ jobs:
         run: node plugins/forge/hooks/tests/run.js
       - name: Hook unit runs (smoke)
         run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
+      - name: Project SessionStart hook unit tests
+        run: .claude/hooks/tests/session-start.test.sh
       - name: LF line endings enforced
         run: |
           if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then
