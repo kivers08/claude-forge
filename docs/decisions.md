@@ -255,6 +255,26 @@ The close-out step assembles fragments into the dated header at merge and
 deletes them. Schema gains `changelog.file` and `changelog.fragmentsDir`. The
 audit-framework validator checks fragments are well-formed.
 
+Built: `scripts/changelog-closeout.js` (dependency-free Node script). Parses
+every fragment in `changelog.d/` (all `.md` files except `README.md`) using
+the same fragment shape as `changelog.d/README.md` describes (`section:
+<Name>` lines followed by `- bullet` lines, indented continuations allowed),
+groups bullets by section name in first-encountered order across fragments
+(processed in sorted filename order for determinism), and prepends a `##
+YYYY-MM-DD` section — with a `### <section>` sub-header per section name
+found, no fixed whitelist — directly under the `# Changelog` H1 in
+`CHANGELOG.md`, above whatever content is already there. On success it
+deletes the fragments it just assembled. It refuses to run (exit 1, no
+changes made) when there are zero fragments to assemble (clean idempotent
+no-op) or when any fragment fails shape validation, pointing at
+`scripts/validate-changelog.js` for details rather than assembling malformed
+input.
+
+This is on-demand only — invoked by a human or an agent explicitly running
+it. It is not wired into CI, a git hook, or any automatic trigger; full
+pipeline automation (implement → review → changelog close-out → merge) is
+D22, which remains a design note, not built.
+
 ### D22 — Pipelines as code (design note only)
 implement → review → fix → re-review → changelog close-out → merge-base
 refresh, run as a script/workflow that returns a readiness report: tier, what
