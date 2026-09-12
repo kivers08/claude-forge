@@ -26,7 +26,7 @@ Claude Code in C0: 2.1.268, Node v22.22.2, Linux, running as root,
 | 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | |
 | 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | |
 | 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | |
-| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL, confirms the C0 simulation (see below) | n/a |
+| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL bare (no hook); PASS once `.claude/hooks/session-start.sh` (option 4) is present — confirmed in a fresh session 2026-09-12, see below | n/a |
 | 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | |
 | 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | |
 | 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | |
@@ -136,6 +136,12 @@ install forge@claude-forge` before each session. Option 3 (vendoring) stays the
 documented fallback if a real cloud row shows option 1 failing. Row C still runs
 — it decides whether check 6 fails as predicted, and whether auto memory is on.
 
+**Superseded below:** row C's real run led the owner to pick option 4 (a
+project-committed SessionStart hook) instead of this option 1, in an
+interactive decision made during that session — see "Row C confirmed" and the
+"Conclusion" paragraph further down. Option 1's exact command is kept here
+only as the documented backup if option 4 is ever removed.
+
 ### Row C confirmed, 2026-09-12 (real Android cloud session)
 
 A real cloud session started from the Android app, based on `main` (which
@@ -162,15 +168,50 @@ remote guard set. Preferred over option 1 (environment-side setup script)
 because it is versioned with the repo and needs no per-environment
 configuration outside it.
 
-**Still unverified — flagged, not resolved:** D24 rejected the SessionStart-hook
-approach as "untested... a plugin installed mid-session probably does not
-load its hooks or agents until restart." This project-level hook runs earlier
-(before the session's tool loop starts, not mid-session), so it may not have
-that problem, but this session could not prove it either way — the hook
-didn't exist yet when this session's own SessionStart already fired. Needs a
-genuinely fresh session on this branch (or on `main` after merge) checking
-whether `forge`'s and `smoke`'s own SessionStart context/hooks are live from
-turn one, with no manual install.
+**Was unverified, now RESOLVED (2026-09-12, fresh cloud session, this branch):**
+D24 rejected the SessionStart-hook approach as "untested... a plugin
+installed mid-session probably does not load its hooks or agents until
+restart." A genuinely fresh cloud container was opened on this branch
+(`.claude/hooks/session-start.sh` already present, `CLAUDE_CODE_REMOTE=true`).
+Before any manual action:
+
+- The SessionStart hook's own success log showed the marketplace add and both
+  `claude plugin install` calls ran automatically.
+- `claude plugin list` showed `forge@claude-forge` and `smoke@claude-forge`
+  both `enabled` at user scope, with no manual install performed.
+- Both plugins' hooks were live from turn one: the exec-form PreToolUse Node
+  hook fired on the very first Bash call (`smoke.log` line 1), and the
+  PostToolUse `additionalContext` sentence appeared after it.
+- `smoke:smoke-agent` was dispatchable and returned `FORGE-MARKER-7f3a`
+  verbatim; SubagentStop fired and captured `last_assistant_message`; the
+  `.claude/rules/smoke-rule.md` `paths:` rule reached the subagent on its
+  `Read` of `smoke-fixtures/rule-target.md` (`rule_seen: YES`, exact line
+  quoted back).
+- `${CLAUDE_PLUGIN_DATA}` resolved to `/root/.claude/plugins/data/smoke-claude-forge`,
+  consistent with prior rows.
+- Native agent memory: still no memory mechanism available to the subagent in
+  this container (no override set this run) — consistent with finding 10,
+  not a regression from the hook.
+
+**Conclusion: check 6 passes via option 4 (project-committed SessionStart
+hook).** The hook runs before the tool loop starts, not mid-session, so D24's
+concern about mid-session plugin loads does not apply here. Option 1
+(environment-side setup script, D24's original pick) remains the documented
+backup in case the project hook is ever removed or `CLAUDE_CODE_REMOTE`
+detection changes — its exact commands are in the "Options for cloud" list
+above (option 1) and do not need repeating here.
+
+### 12. `user-level-write` guard false-positives on plain reads
+
+Observed in the same verification session: a `cat` of a file under
+`~/.claude/plugins/data/...` was blocked by the `forge` `user-level-write`
+Bash guard with the same message used for writes ("Blocked path(s): ...").
+`cat`, `<file`, and other read-only shapes should not trip a guard meant to
+stop writes into the human's machine-wide config; only write-shaped commands
+(`cp`/`tee`/`>`/`>>` per the guard's own description in `plan-excerpt.md`)
+should match. Worked around by using the Read tool instead of Bash. File
+against the guard's regex before U2 hooks ship — this is a false positive,
+not a policy question.
 
 ### Why the real row C could not run from this session
 
