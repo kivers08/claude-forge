@@ -21,17 +21,17 @@ Claude Code in C0: 2.1.268, Node v22.22.2, Linux, running as root,
 
 | # | Check | C0 (this container) | A | B | C | D |
 |---|-------|---------------------|---|---|---|---|
-| 1 | Installs from the private marketplace | PASS. Both a local `directory` source and the `github` source (private repo cloned through git credentials, `ref` pinned to this branch) installed `smoke` with `claude plugin install` | | | | |
-| 2 | `/smoke:ping` listed | PASS. `claude -p "/smoke:ping"` returned `SMOKE-SKILL-MARKER-9c1e` and reported the agent as `smoke:smoke-agent` | | | | |
-| 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | |
-| 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | |
-| 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | |
-| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL bare (no hook); PASS once `.claude/hooks/session-start.sh` (option 4) is present — confirmed in a fresh session 2026-09-12, see below | n/a |
-| 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | |
-| 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | |
-| 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | |
-| 10 | Native agent memory | PASS with a caveat: auto memory was OFF by default in this container; see below | | | | |
-| 11 | `${CLAUDE_PLUGIN_DATA}` writable, stable, path | PASS. `/root/.claude/plugins/data/smoke-claude-forge`, identical across restarts, arg and env agree | | | | |
+| 1 | Installs from the private marketplace | PASS. Both a local `directory` source and the `github` source (private repo cloned through git credentials, `ref` pinned to this branch) installed `smoke` with `claude plugin install` | | | | PASS (manual). See "Row D partial run" below |
+| 2 | `/smoke:ping` listed | PASS. `claude -p "/smoke:ping"` returned `SMOKE-SKILL-MARKER-9c1e` and reported the agent as `smoke:smoke-agent` | | | | Not yet — plugin installed mid-session, not loaded until restart; see below |
+| 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | Blocked on restart, same as check 2 |
+| 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | Blocked on restart, same as check 2 |
+| 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | Blocked on restart, same as check 2 |
+| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL bare (no hook); PASS once `.claude/hooks/session-start.sh` (option 4) is present — confirmed in a fresh session 2026-09-12, see below | n/a — the SessionStart hook is gated on `CLAUDE_CODE_REMOTE=true`, which was unset on this Remote-Control-to-VPS session; see below |
+| 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | Pending — needs a session restart on this machine to confirm |
+| 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | Blocked on restart, same as check 2 |
+| 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | Blocked on restart, same as check 2 |
+| 10 | Native agent memory | PASS with a caveat: auto memory was OFF by default in this container; see below | | | | Blocked on restart, same as check 2 |
+| 11 | `${CLAUDE_PLUGIN_DATA}` writable, stable, path | PASS. `/root/.claude/plugins/data/smoke-claude-forge`, identical across restarts, arg and env agree | | | | Blocked on restart, same as check 2 |
 
 ## Findings worth carrying into the build
 
@@ -200,6 +200,38 @@ concern about mid-session plugin loads does not apply here. Option 1
 backup in case the project hook is ever removed or `CLAUDE_CODE_REMOTE`
 detection changes — its exact commands are in the "Options for cloud" list
 above (option 1) and do not need repeating here.
+
+### Row D partial run, 2026-09-12 (owner's dev VPS, session already open via Remote Control)
+
+This was an already-running interactive session on the owner's persistent dev
+VPS (Remote Control from the Android app), not a fresh one, so it tests a
+different path than row C: manual install into a live session rather than
+the SessionStart hook.
+
+- `CLAUDE_CODE_REMOTE` was unset (empty string) in this session's environment.
+  `.claude/hooks/session-start.sh` exits 0 immediately when that variable is
+  not `"true"`, so the auto-install path never ran here — confirmed by
+  `~/.claude/plugins/installed_plugins.json` being absent and `claude plugin
+  list` reporting no plugins installed at session start, despite the
+  marketplace already being registered from a prior `claude plugin
+  marketplace add`. This means `CLAUDE_CODE_REMOTE=true` is specific to
+  Anthropic-hosted cloud containers, not Remote-Control sessions to an
+  owner-controlled persistent machine — check 6 is **n/a** for row D, not a
+  fail, since D24's "persistent machines only need a one-time manual install"
+  reasoning already covers this case.
+- Ran `claude plugin install smoke@claude-forge` and `claude plugin install
+  forge@claude-forge` by hand mid-session: both installed cleanly at user
+  scope (`~/.claude/plugins/cache/claude-forge/{smoke,forge}/0.0.1`),
+  `installed_plugins.json` recorded both with `gitCommitSha:
+  2c8f38d1fd69526c7ae3798ab2c11aa346cc2c46`. Check 1 is **PASS** for row D.
+- The plugin's slash commands/agents were NOT available in this same
+  still-running session after the install (no `smoke:ping` skill or
+  `smoke:smoke-agent`/forge agents listed) — consistent with D24's original,
+  later-superseded concern that "a plugin installed mid-session probably does
+  not load its hooks or agents until restart." This is now an observed data
+  point for that exact mechanism (manual install into a live session) rather
+  than an untested guess. Checks 2–5 and 7–11 need a fresh restart of this
+  same VPS session to confirm; not run yet.
 
 ### 12. `user-level-write` guard false-positives on plain reads
 

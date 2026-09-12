@@ -275,3 +275,16 @@ chose to proceed to U4 anyway; this is a partial, explicit override of D25's
 gate, not a claim that A/B are satisfied. `phase0-results.md`'s matrix should
 be corrected with the actual row this new cloud session corresponds to (or a
 new row added) once that's confirmed.
+
+**Row D partially run, same day:** an already-open session on the owner's dev
+VPS (Remote Control from the Android app) checked in. `CLAUDE_CODE_REMOTE` was
+unset there, so `.claude/hooks/session-start.sh`'s auto-install never fires on
+this machine (that variable is Anthropic-cloud-specific, not set by
+Remote-Control-to-a-persistent-box) — check 6 is n/a for row D, consistent
+with D24's "persistent machines only need a one-time manual install"
+reasoning. Manual `claude plugin install` for both plugins worked (check 1
+PASS), but neither plugin's hooks/agents/skills loaded into that
+already-running session afterward, confirming D24's original mid-session-load
+concern for this specific path. Checks 2–5 and 7–11 still need a restart of
+that session to confirm; rows A and B remain fully unrun. See
+`phase0-results.md`'s "Row D partial run" note for detail.
