@@ -213,7 +213,41 @@ this T0 exception explicitly.
 `main` is protected by required STATUS CHECKS (CI, `forge validators`,
 `reviewer clean`), not required approvals: the coordinator never approves.
 Design note for U3/U5: the plugin (via CI) posts a `forge validators` check
-run and a `reviewer clean` commit status. Recorded now; built later.
+run and a `reviewer clean` commit status.
+
+Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
+`scripts/reviewer-clean-check.js`):
+- **`forge validators`** — a required (fails the build on any problem),
+  fully deterministic job. Runs `validate-plugins.js --strict` (manifest and
+  frontmatter shape) plus a new dependency-free changelog fragment shape
+  check (D21): every `changelog.d/*.md` except `README.md` must parse as one
+  or more `section: <name>` blocks each followed by at least one `- `
+  bullet.
+- **`reviewer clean`** — dispatches the `forge:reviewer` agent headlessly
+  (`claude -p`, fed `agents/reviewer.md`'s own body as the system prompt,
+  same "full" mode the `review` skill defaults to) against the PR's diff,
+  then posts a commit status (`success`/`failure`) via the GitHub statuses
+  API. Blocking = bugs + security issues + convention violations from the
+  reviewer's own closing summary line; bare suggestions don't block.
+- **Self-hosted only, both checks.** Both jobs reuse the exact `CORP_RUNNER`
+  repo/org variable gate `ci.yml`'s `validate` job already uses for its
+  `runs-on`. On the GitHub-hosted fallback (`CORP_RUNNER` unset/false),
+  both report a graceful skip instead of failing the build — `forge
+  validators` exits 0 with a message before running its checks; `reviewer
+  clean` posts a `success` status with a `skipped: <reason>` description.
+  Same pattern for either: this mirrors the existing "claude plugin
+  validate --strict" CI step's `continue-on-error` fallback.
+- **No new secret.** `reviewer clean` authenticates by reusing whatever
+  `claude` login already exists on the self-hosted runner (the owner's
+  Claude subscription, not an API key) and posts to GitHub with the
+  workflow's own `GITHUB_TOKEN`. If `claude` isn't on PATH or isn't
+  authenticated, it skips gracefully the same way as the CORP_RUNNER-unset
+  case — no `ANTHROPIC_API_KEY` or other secret was added.
+- **Not yet enforced.** No branch-protection ruleset was created or changed
+  by this work — it only builds the mechanism a future ruleset would
+  require. Turning required-status-check enforcement on for `main` is a
+  separate, explicit owner decision (see the open `d26-branch-protection`
+  draft).
 
 ### D21 — Changelog fragments
 Each PR adds `changelog.d/<slug>.md` containing a section name and a bullet.
