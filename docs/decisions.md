@@ -264,3 +264,14 @@ unit (U2) does not depend on HOW the plugin is delivered to a session, only on
 hook behaviour already proven by Phase 0 checks 4, 5 and 11 in row C0. U2 builds
 now. Rows A–D still gate U3+ and still decide D4 (native memory off by default
 in cloud) and D24.
+
+### D26 — U4 proceeds; rows A/B still outstanding (owner override, partial)
+2026-09-12: owner ran an additional cloud-environment verification beyond row
+C's Android session and gave an explicit "continue building" for U4, with row
+**D** (VPS via Remote Control) explicitly deferred to a later install/test
+pass. This is NOT the same as rows **A** (Linux dev box terminal) or **B**
+(WSL2) from the Phase 0 matrix — those remain unrun as of this decision. Owner
+chose to proceed to U4 anyway; this is a partial, explicit override of D25's
+gate, not a claim that A/B are satisfied. `phase0-results.md`'s matrix should
+be corrected with the actual row this new cloud session corresponds to (or a
+new row added) once that's confirmed.

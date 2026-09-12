@@ -6,6 +6,11 @@
 // never touches Bash, so without this the gate has a hole wide enough to merge
 // through.
 //
+// Only gated when the PR's destination is `git.baseBranch` (resolved via
+// `gh pr view`, best-effort — see merge-gate.js). A PR merging into any other
+// branch, e.g. a child unit merging into an owner-chosen integration branch,
+// is not a merge to the base branch and is not gated here.
+//
 // This hook fails CLOSED, unlike every other hook here. An unreadable payload
 // means the marker cannot be checked, and "we could not verify the human said
 // merge" must not resolve to "merge it". The cost of the wrong call is one
@@ -23,12 +28,15 @@ function main() {
   const input = payload.tool_input || {};
 
   const method = String(input.merge_method || input.mergeMethod || '').toLowerCase();
+  const pullNumber = input.pullNumber || input.pull_number;
+  const targetBranch = guard.resolvePrBaseBranch(projectDir, pullNumber);
   const verdict = guard.checkMerge({ config, projectDir }, {
-    what: `merging PR #${input.pullNumber || input.pull_number || '?'} through the GitHub MCP server`,
+    what: `merging PR #${pullNumber || '?'} through the GitHub MCP server`,
     requireSquash: true,
     // An unset merge_method means the repository default, which is not
     // provably a squash: treat it as not-a-squash and make the caller say so.
     isSquash: method === 'squash',
+    targetBranch,
   });
   if (!verdict) return;
 

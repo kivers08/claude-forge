@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+'use strict';
+// Fake `gh` for hook tests. Only understands what merge-gate.js calls:
+//   gh pr view [<identifier>] --json baseRefName -q .baseRefName
+// Prints $FAKE_GH_BASE_REF (default "main") and exits 0, so tests can steer
+// the resolved PR destination without a real GitHub CLI or network access.
+// Any other invocation exits 1 with nothing on stdout.
+const args = process.argv.slice(2);
+if (process.env.FAKE_GH_FAIL) process.exit(1);
+if (args[0] === 'pr' && args[1] === 'view') {
+  process.stdout.write((process.env.FAKE_GH_BASE_REF || 'main') + '\n');
+  process.exit(0);
+}
+process.exit(1);

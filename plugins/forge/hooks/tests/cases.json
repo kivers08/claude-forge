@@ -170,6 +170,30 @@
     "git": true, "mergeMarkerMinutes": 2, "command": "merge",
     "expect": { "exit": 0, "deny": true, "stdoutIncludes": "squash-merge" } },
 
+  { "name": "merge-gate: gh pr merge into a non-base branch is not gated",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "command": "gh pr merge 7 --squash",
+    "env": { "FAKE_GH_BASE_REF": "claude/integration-branch" },
+    "expect": { "exit": 0, "deny": false } },
+
+  { "name": "merge-gate: gh pr merge into the base branch is still gated",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "command": "gh pr merge 7 --squash",
+    "env": { "FAKE_GH_BASE_REF": "main" },
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "no claude-human-merge-ok marker" } },
+
+  { "name": "merge-gate: gh pr merge with an unresolvable destination fails safe (gated)",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
+    "git": true, "command": "gh pr merge 7 --squash",
+    "env": { "FAKE_GH_FAIL": "1" },
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "no claude-human-merge-ok marker" } },
+
+  { "name": "merge-gate: MCP merge into a non-base branch is not gated",
+    "script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json",
+    "git": true, "command": "squash",
+    "env": { "FAKE_GH_BASE_REF": "claude/integration-branch" },
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
   { "name": "worktree-commit: a normal commit is allowed",
     "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
     "git": true, "branch": "feat/x", "command": "git commit -m 'work'",

@@ -90,11 +90,18 @@ cases.forEach((c, n) => {
     payload = payload.split('{{FILE_PATH}}').join(encoded);
   }
 
+  // Fake `gh` on PATH (fixtures/bin/gh) resolves `gh pr view` for the
+  // merge-gate tests without a real GitHub CLI or network access. It answers
+  // "main" by default — same as git.baseBranch's own default — so every
+  // pre-existing test (which never overrides FAKE_GH_BASE_REF) sees identical
+  // behavior to when `gh` was simply absent from PATH.
+  const fakeBin = path.join(TESTS, 'fixtures', 'bin');
   const env = {
     ...process.env,
     CLAUDE_PLUGIN_ROOT: PLUGIN,
     CLAUDE_PLUGIN_DATA: dataDir,
     ...(c.env || {}),
+    PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };
   delete env.CLAUDE_PROJECT_DIR; // payload cwd must be the only project source
   const r = spawnSync(process.execPath, [script, dataDir], { input: payload, encoding: 'utf8', env });
