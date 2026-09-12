@@ -265,7 +265,7 @@ hook behaviour already proven by Phase 0 checks 4, 5 and 11 in row C0. U2 builds
 now. Rows A–D still gate U3+ and still decide D4 (native memory off by default
 in cloud) and D24.
 
-### D26 — U4 proceeds; rows A/B still outstanding (owner override, partial)
+### D26 — U4 proceeds; rows A/B still outstanding (owner override, now fully confirmed for row D)
 2026-09-12: owner ran an additional cloud-environment verification beyond row
 C's Android session and gave an explicit "continue building" for U4, with row
 **D** (VPS via Remote Control) explicitly deferred to a later install/test
@@ -289,12 +289,25 @@ mid-session-load concern for this specific path.
 
 Checks 2–5 and 7–11 were then run via independent headless `claude -p`
 subprocesses (the same method C0 used), since the live session can't restart
-itself mid-conversation. All passed. Rows A and B remain fully unrun. See
-`phase0-results.md`'s "Row D partial run" and "Row D agent-dispatch findings"
-notes for full detail, including a real safety finding surfaced along the
-way: this VPS has `permissions.defaultMode: "auto"` set globally in
-`~/.claude/settings.json`, so a headless smoke-agent dispatch committed and
-pushed a stray commit to `claude/units` entirely on its own initiative
-(nothing in the agent's definition asked for this) — cleaned up with a
-follow-up commit, but the underlying auto-approval setting is unchanged and
-is an owner decision, not a forge issue.
+itself mid-conversation. All passed. See `phase0-results.md`'s "Row D partial
+run" and "Row D agent-dispatch findings" notes for full detail, including a
+real safety finding surfaced along the way: this VPS has
+`permissions.defaultMode: "auto"` set globally in `~/.claude/settings.json`,
+so a headless smoke-agent dispatch committed and pushed a stray commit to
+`claude/units` entirely on its own initiative (nothing in the agent's
+definition asked for this) — cleaned up with a follow-up commit, but the
+underlying auto-approval setting is unchanged and is an owner decision, not a
+forge issue.
+
+**Row D fully confirmed, same day, by a literal restart:** later the same
+day the owner opened a genuinely new interactive session on this same VPS
+(this is that literal restart the checks above could only proxy). All of
+checks 1–5 and 7–11 were reconfirmed directly — including the owner running
+`/smoke:ping` themselves (check 2 is gated to explicit user invocation, not
+model-triggerable) and getting the marker back exactly, and this session's
+own SessionStart hook firing with a fresh marker as direct restart evidence
+for check 7. `permissions.defaultMode: "auto"` is still set on this VPS,
+unchanged. Row D is now fully confirmed for every check that applies to it
+(6 remains n/a, per the `CLAUDE_CODE_REMOTE` reasoning above). Rows A and B
+remain fully unrun. See `phase0-results.md`'s "Row D live-session
+confirmation" note for full detail.
