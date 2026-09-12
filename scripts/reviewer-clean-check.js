@@ -150,11 +150,17 @@ async function main() {
   const args = [
     '-p', prompt,
     '--append-system-prompt', systemPrompt,
-    '--allowedTools', 'Read,Glob,Grep,Bash(git *)',
+    // Explicit read-only git subcommands only — not `Bash(git *)`. The
+    // reviewed diff is untrusted content; a prompt injection in it
+    // shouldn't be able to walk this into `git push`/`git commit`/`git
+    // config`/etc. This runner has ambient git credentials for other CI
+    // jobs, so a mutating git command could still succeed even without
+    // GITHUB_TOKEN in this process's own env.
+    '--allowedTools', 'Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)',
     '--output-format', 'json',
   ];
   // Explicit minimal env: the reviewed diff is untrusted PR content and the
-  // reviewer process has Bash(git *) access, so it must not inherit
+  // reviewer process has Bash(git ...) access, so it must not inherit
   // GITHUB_TOKEN (this job's own repo-scoped credential, only needed by
   // this script's own postStatus() call) or PR_HEAD_SHA/GITHUB_* run
   // metadata it has no legitimate use for. PATH/HOME (+ TMPDIR if set) are
@@ -174,14 +180,19 @@ async function main() {
     timeout: TIMEOUT_MS,
   });
 
+  // Check timeout/kill before the generic result.error case: Node's
+  // spawnSync sets BOTH result.error (code ETIMEDOUT) AND result.signal
+  // when the timeout fires, so checking result.error first would swallow
+  // a hang as a benign "couldn't start" skip() — success — which is
+  // exactly backwards from why TIMEOUT_MS exists.
+  const timedOut = result.signal || (result.error && result.error.code === 'ETIMEDOUT');
+  if (timedOut) {
+    log(`claude timed out or was killed (signal=${result.signal || 'n/a'}, error=${result.error ? result.error.code : 'n/a'})`);
+    await postStatus('failure', `reviewer timed out after ${TIMEOUT_MS / 1000}s`);
+    process.exit(1);
+  }
   if (result.error) {
     return skip(`claude invocation failed to start (${result.error.message})`);
-  }
-  if (result.signal) {
-    log(`claude was killed by signal ${result.signal} (likely the ${TIMEOUT_MS / 1000}s timeout)`);
-    await postStatus('failure', `reviewer timed out or was killed (${result.signal})`);
-    process.exit(1);
-    return;
   }
   if (result.status !== 0) {
     const stderr = (result.stderr || '').trim();
@@ -191,7 +202,6 @@ async function main() {
     log(`claude exited ${result.status}: ${stderr.slice(0, 2000)}`);
     await postStatus('failure', 'reviewer invocation failed — see CI logs');
     process.exit(1);
-    return;
   }
 
   let resultText = result.stdout;
@@ -209,7 +219,6 @@ async function main() {
     log(`full reviewer output follows:\n${resultText}`);
     await postStatus('failure', 'reviewer clean: could not parse reviewer summary');
     process.exit(1);
-    return;
   }
 
   // Blocking = bugs + security issues + convention violations. Bare
