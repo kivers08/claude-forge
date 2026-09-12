@@ -18,10 +18,17 @@
 const fs = require('fs');
 const path = require('path');
 const { parseFragment, listFragmentFiles } = require('./lib/changelog-fragment');
+const { load, get } = require('../plugins/forge/hooks/lib/config');
 
 const ROOT = path.resolve(__dirname, '..');
-const FRAGMENTS_DIR = path.join(ROOT, 'changelog.d');
-const CHANGELOG_FILE = path.join(ROOT, 'CHANGELOG.md');
+// D12/D21: both paths are project-configurable (changelog.fragmentsDir,
+// changelog.file in .claude/forge.json), defaulting to 'changelog.d' and
+// 'CHANGELOG.md' — this repo itself has no forge.json, so it always falls
+// through to those defaults, but a project that adopts forge and sets
+// either key must have it honored here, not silently ignored.
+const { config } = load(ROOT);
+const FRAGMENTS_DIR = path.join(ROOT, get(config, 'changelog.fragmentsDir', 'changelog.d'));
+const CHANGELOG_FILE = path.join(ROOT, get(config, 'changelog.file', 'CHANGELOG.md'));
 
 function rel(p) {
   return path.relative(ROOT, p).split(path.sep).join('/');
