@@ -47,6 +47,13 @@
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/stop-git-check.js", "${CLAUDE_PLUGIN_DATA}"] }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/subagent-telemetry.js", "${CLAUDE_PLUGIN_DATA}"] }
+        ]
+      }
     ]
   }
 }

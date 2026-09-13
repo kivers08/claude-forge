@@ -1,0 +1,14 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-00000000000c",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent-002",
+  "agent_type": "reviewer",
+  "agent_transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a/subagents/agent-agent-002.jsonl",
+  "last_assistant_message": "### Findings\n\nNo issues found in this pass; report is still being drafted.\n",
+  "background_tasks": [],
+  "session_crons": []
+}

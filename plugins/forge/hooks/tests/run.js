@@ -16,6 +16,7 @@
 //     "expect": {
 //       "exit": 0, "stdoutEmpty": true, "stdoutIncludes": "...",
 //       "stdoutExcludes": "...", "stdoutJson": {...}, "fileExists": "smoke.log",
+//       "fileIncludes": { "file": "telemetry.jsonl", "text": "..." },
 //       "deny": true | false
 //     }
 //   }
@@ -104,10 +105,20 @@ cases.forEach((c, n) => {
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };
   delete env.CLAUDE_PROJECT_DIR; // payload cwd must be the only project source
+
+  const exp = c.expect || {};
+
+  // dataDir is shared across every case (hooks append to the same
+  // telemetry.jsonl etc.), so a fileIncludes check must only look at bytes
+  // this case's run appended -- otherwise an assertion can pass because an
+  // unrelated earlier or later case happened to write matching text to the
+  // same file.
+  const includesFile = exp.fileIncludes ? path.join(dataDir, exp.fileIncludes.file) : null;
+  const offset = includesFile && fs.existsSync(includesFile) ? fs.statSync(includesFile).size : 0;
+
   const r = spawnSync(process.execPath, [script, dataDir], { input: payload, encoding: 'utf8', env });
 
   const problems = [];
-  const exp = c.expect || {};
   if (exp.exit !== undefined && r.status !== exp.exit) problems.push(`exit ${r.status} != ${exp.exit}`);
   if (exp.stdoutIncludes && !r.stdout.includes(exp.stdoutIncludes)) problems.push(`stdout lacks ${JSON.stringify(exp.stdoutIncludes)}`);
   if (exp.stdoutExcludes && r.stdout.includes(exp.stdoutExcludes)) problems.push(`stdout unexpectedly contains ${JSON.stringify(exp.stdoutExcludes)}`);
@@ -134,6 +145,15 @@ cases.forEach((c, n) => {
   }
   if (exp.fileExists && !fs.existsSync(path.join(dataDir, exp.fileExists))) {
     problems.push(`expected file ${exp.fileExists} in CLAUDE_PLUGIN_DATA`);
+  }
+  if (exp.fileIncludes) {
+    const f = includesFile;
+    const full = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+    // Only the bytes appended by *this* case's run -- see offset comment above.
+    const body = fs.existsSync(f) ? fs.readFileSync(f).slice(offset).toString('utf8') : '';
+    if (!body.includes(exp.fileIncludes.text)) {
+      problems.push(`expected ${exp.fileIncludes.file} to include ${JSON.stringify(exp.fileIncludes.text)} (in this case's appended output), got: ${body.trim().slice(-300) || '(nothing appended)'}; full file tail: ${full.trim().slice(-200)}`);
+    }
   }
 
   if (problems.length) {

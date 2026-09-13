@@ -17,8 +17,11 @@ actually being worked, using what telemetry and the task files already show.
    not something this skill fixes itself.
 2. **Zero-use mechanisms (D10).** Read `${CLAUDE_PLUGIN_DATA}/telemetry.jsonl`
    and list any skill, agent, or guard with no recorded use over a
-   meaningful window (the report states the window it checked). This is a
-   list for the human to prune from, not an automatic removal.
+   meaningful window (the report states the window it checked). Count only
+   `event: "invocation"` rows toward use; `event: "unit_complete"` rows are
+   per-dispatch completion records written by the SubagentStop hook, not a
+   second invocation of the same agent, and must not be double-counted. This
+   is a list for the human to prune from, not an automatic removal.
 3. **Delegation drift.** Check whether `delegation.inlineAllow` /
    `delegation.delegatedPaths` still reflect reality — e.g. a path that's
    been inline-edited repeatedly despite being marked `delegatedPaths`, per

@@ -1,0 +1,14 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-00000000000d",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent-003",
+  "agent_type": "implementer",
+  "agent_transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a/subagents/agent-agent-003.jsonl",
+  "last_assistant_message": "Implemented the change and committed it.\n\n### LEARNING\nagent: implementer\ndate: 2026-09-12\nbranch: claude/example\nmistake: none\n",
+  "background_tasks": [],
+  "session_crons": []
+}

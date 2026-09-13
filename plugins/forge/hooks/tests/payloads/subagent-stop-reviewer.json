@@ -1,0 +1,14 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-00000000000b",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent-001",
+  "agent_type": "reviewer",
+  "agent_transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a/subagents/agent-agent-001.jsonl",
+  "last_assistant_message": "### Findings\n\n- **Bug**: off-by-one in pagination\n\nSummary: 1 bug, 0 security issues, 2 convention violations, 3 suggestions.\n\n### LEARNING\nagent: reviewer\ndate: 2026-09-12\nbranch: claude/example\nmistake: none\n",
+  "background_tasks": [],
+  "session_crons": []
+}

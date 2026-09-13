@@ -252,6 +252,22 @@
     "script": "hooks/telemetry.js", "payload": "payloads/telemetry-skill.json",
     "expect": { "exit": 0, "stdoutEmpty": true, "fileExists": "telemetry.jsonl" } },
 
+  { "name": "subagent-telemetry: parses a reviewer's findings summary",
+    "script": "hooks/subagent-telemetry.js", "payload": "payloads/subagent-stop-reviewer.json",
+    "expect": { "exit": 0, "stdoutEmpty": true,
+      "fileIncludes": { "file": "telemetry.jsonl",
+        "text": "\"findings\":{\"bugs\":1,\"security\":0,\"convention\":2,\"suggestions\":3}" } } },
+
+  { "name": "subagent-telemetry: unparseable reviewer summary yields null findings, not a guess",
+    "script": "hooks/subagent-telemetry.js", "payload": "payloads/subagent-stop-reviewer-unparseable.json",
+    "expect": { "exit": 0, "stdoutEmpty": true,
+      "fileIncludes": { "file": "telemetry.jsonl", "text": "\"agent_type\":\"reviewer\",\"session_id\":\"5f0b1c2a-0000-4000-8000-00000000000c\",\"agent_id\":\"agent-002\",\"output_chars\":75,\"findings\":null" } } },
+
+  { "name": "subagent-telemetry: non-reviewer agent logs output_chars with no findings count",
+    "script": "hooks/subagent-telemetry.js", "payload": "payloads/subagent-stop-implementer.json",
+    "expect": { "exit": 0, "stdoutEmpty": true,
+      "fileIncludes": { "file": "telemetry.jsonl", "text": "\"agent_type\":\"implementer\",\"session_id\":\"5f0b1c2a-0000-4000-8000-00000000000d\",\"agent_id\":\"agent-003\",\"output_chars\":128,\"findings\":null" } } },
+
   { "name": "fail open: pre-bash on a malformed payload",
     "script": "hooks/pre-bash.js", "payload": "payloads/malformed.json",
     "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
@@ -278,5 +294,9 @@
 
   { "name": "fail open: telemetry on a malformed payload",
     "script": "hooks/telemetry.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "fail open: subagent-telemetry on a malformed payload",
+    "script": "hooks/subagent-telemetry.js", "payload": "payloads/malformed.json",
     "expect": { "exit": 0, "stdoutEmpty": true } }
 ]
