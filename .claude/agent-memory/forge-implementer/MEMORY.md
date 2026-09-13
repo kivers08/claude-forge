@@ -1,0 +1,2 @@
+- [Child unit branch convention](project_child_unit_branches.md) — unit branches PR into the parent unit branch, not main; confirm with dispatch prompt + `git branch --show-current`.
+- [Local testing scope](feedback_local_testing_scope.md) — scoped tests on touched files only; full CI suite runs belong on the self-hosted runner, not this session.
