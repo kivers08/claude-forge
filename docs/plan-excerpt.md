@@ -111,6 +111,9 @@ implementer, bug-fixer, test-writer, reviewer, doc-updater, explorer. Each:
 - `audit-framework`: validators for index/body sync, CLAUDE.md framework-block
   drift, stale-precondition grep, forge.json vs schema, zero-use telemetry,
   changelog fragment shape (D21), changed files falling through every tier (D17)
+- `pipeline` (D22): coordinator-followed implement → review → fix loop →
+  changelog close-out → merge-base refresh → readiness report; not an
+  automated script
 
 ## Tiered process (addendum D17–D23, design notes)
 
@@ -129,9 +132,13 @@ implementer, bug-fixer, test-writer, reviewer, doc-updater, explorer. Each:
 - **Changelog close-out** (D21): session-wrap-up or the merge pipeline reads
   `changelog.fragmentsDir`, groups fragments by section, prepends a dated
   header to `changelog.file`, deletes the fragments, commits.
-- **Pipeline** (D22): one script/workflow, implement → review → fix →
-  re-review → changelog close-out → merge-base refresh, returning a readiness
-  report: tier, what changed, what verified it, risks.
+- **Pipeline** (D22): implement → review → fix → re-review → changelog
+  close-out → merge-base refresh, returning a readiness report: tier, what
+  changed, what verified it, risks. Delivered as the `pipeline` skill — a
+  process the coordinator follows step by step, dispatching the right agent
+  at each stage — not a headless script; see the skill for the explicit
+  scope decision. A fully unattended/headless variant remains undelivered
+  and would be its own separate, future unit.
 - **Measure first** (D23): telemetry adds tokens-per-unit and
   review-findings-per-unit; skill evals via `claude plugin eval`; audit
   lists mechanisms with no measured effect for the owner to prune.

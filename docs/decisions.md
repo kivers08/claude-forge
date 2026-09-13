@@ -276,14 +276,25 @@ no-op) or when any fragment fails shape validation, pointing at
 input.
 
 This is on-demand only — invoked by a human or an agent explicitly running
-it. It is not wired into CI, a git hook, or any automatic trigger; full
-pipeline automation (implement → review → changelog close-out → merge) is
-D22, which remains a design note, not built.
+it. It is not wired into CI, a git hook, or any automatic trigger; the full
+sequence (implement → review → changelog close-out → merge) is formalized by
+D22 below.
 
-### D22 — Pipelines as code (design note only)
+### D22 — Pipelines as code
 implement → review → fix → re-review → changelog close-out → merge-base
-refresh, run as a script/workflow that returns a readiness report: tier, what
-changed, what verified it, risks.
+refresh, returning a readiness report: tier, what changed, what verified it,
+risks.
+
+**Delivered scope (revised from the original design note):** built as the
+`plugins/forge/skills/pipeline/SKILL.md` skill — a process the coordinator
+follows step by step, dispatching `dispatch`/`review`/bug-fixer at each
+stage and producing the readiness report themselves, not a script that runs
+any of this unattended. This plugin has no mechanism for a plain script to
+spawn a Claude agent inside an interactive session (only the coordinator
+can), so a genuinely headless variant would need `reviewer-clean-check.js`'s
+`claude -p` pattern applied to every stage, not just review — materially
+higher-risk (no human attendance on implement/fix) and explicitly deferred
+to its own future, separately-numbered unit, not part of D22 as delivered.
 
 ### D23 — Measure before adding
 Telemetry (D10) plus tokens-per-unit and review-findings-per-unit; skill
