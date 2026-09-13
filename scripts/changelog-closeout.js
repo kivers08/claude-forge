@@ -68,7 +68,7 @@ function prependToChangelog(datedSection) {
 function main() {
   const files = listFragmentFiles(FRAGMENTS_DIR);
   if (files.length === 0) {
-    console.log('nothing to assemble: changelog.d/ has no fragments (only README.md, if present)');
+    console.log(`nothing to assemble: ${rel(FRAGMENTS_DIR)}/ has no fragments (only README.md, if present)`);
     process.exit(1);
   }
 
@@ -100,7 +100,22 @@ function main() {
   const newChangelog = prependToChangelog(datedSection);
   fs.writeFileSync(CHANGELOG_FILE, newChangelog);
 
-  for (const f of files) fs.unlinkSync(f);
+  // Report deletion failures instead of swallowing them: a fragment left
+  // behind after its bullets are already written would get re-appended
+  // (duplicated) on the next close-out run.
+  const deleteErrors = [];
+  for (const f of files) {
+    try {
+      fs.unlinkSync(f);
+    } catch (e) {
+      deleteErrors.push(`${rel(f)}: ${e.message}`);
+    }
+  }
+  if (deleteErrors.length > 0) {
+    console.error(`assembled into ${rel(CHANGELOG_FILE)}, but failed to delete ${deleteErrors.length} fragment(s) — remove these manually, or they will be duplicated on the next close-out:`);
+    for (const e of deleteErrors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
 
   console.log(`assembled ${files.length} fragment(s) into ${rel(CHANGELOG_FILE)} and deleted them:`);
   for (const f of files) console.log(`  - ${rel(f)}`);

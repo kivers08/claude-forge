@@ -229,13 +229,18 @@ Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
   then posts a commit status (`success`/`failure`) via the GitHub statuses
   API. Blocking = bugs + security issues + convention violations from the
   reviewer's own closing summary line; bare suggestions don't block.
-- **Self-hosted only, both checks.** Both jobs reuse the exact `CORP_RUNNER`
-  repo/org variable gate `ci.yml`'s `validate` job already uses for its
-  `runs-on`. On the GitHub-hosted fallback (`CORP_RUNNER` unset/false),
-  both report a graceful skip instead of failing the build — `forge
-  validators` exits 0 with a message before running its checks; `reviewer
-  clean` posts a `success` status with a `skipped: <reason>` description.
-  Same pattern for either: this mirrors the existing "claude plugin
+- **`forge validators` always runs; only `reviewer clean` skips off
+  self-hosted.** Both jobs reuse the exact `CORP_RUNNER` repo/org variable
+  gate `ci.yml`'s `validate` job already uses, but only to pick *which*
+  runner they land on. `forge validators` is pure, dependency-free Node
+  with no external CLI/auth requirement, so it always runs both of its
+  checks regardless of runner — gating a required, deterministic check
+  behind runner availability would let it silently no-op on the exact
+  fallback path it exists to still catch problems on. `reviewer clean` is
+  the one that conditionally skips: its script checks `CORP_RUNNER` itself
+  before dispatching the reviewer agent, and posts a `success` status with
+  a `skipped: <reason>` description instead of failing the build when it's
+  off the self-hosted runner. This mirrors the existing "claude plugin
   validate --strict" CI step's `continue-on-error` fallback.
 - **No new secret.** `reviewer clean` authenticates by reusing whatever
   `claude` login already exists on the self-hosted runner (the owner's

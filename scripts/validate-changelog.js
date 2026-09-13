@@ -38,7 +38,7 @@ for (const file of files) {
 
 if (allErrors.length) {
   for (const e of allErrors) console.error(`error: ${e}`);
-  console.error(`\n${allErrors.length} error(s) across changelog.d/ fragments`);
+  console.error(`\n${allErrors.length} error(s) across ${rel(DIR)}/ fragments`);
   process.exit(1);
 }
 console.log(`ok: ${files.length} fragment(s) valid`);

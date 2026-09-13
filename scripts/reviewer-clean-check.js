@@ -48,10 +48,13 @@ function postStatus(state, description) {
     context: CONTEXT,
   });
   const [owner, name] = repo.split('/');
-  const apiHost = process.env.GITHUB_API_URL ? new URL(process.env.GITHUB_API_URL).hostname : 'api.github.com';
+  // Join onto GITHUB_API_URL's own path, not just its hostname — on GitHub
+  // Enterprise that URL includes a `/api/v3` prefix the request must keep.
+  const apiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+  const apiUrl = new URL(`${apiBase}/repos/${owner}/${name}/statuses/${sha}`);
   const options = {
-    hostname: apiHost,
-    path: `/repos/${owner}/${name}/statuses/${sha}`,
+    hostname: apiUrl.hostname,
+    path: apiUrl.pathname + apiUrl.search,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -105,13 +108,21 @@ function readReviewerSystemPrompt() {
 // Parses the reviewer agent's required closing summary line, e.g.
 // "2 bugs, 0 security issues, 1 convention violation, 3 suggestions."
 function parseSummary(resultText) {
-  const m = /(\d+)\s+bugs?,\s*(\d+)\s+security\s+issues?,\s*(\d+)\s+convention\s+violations?,\s*(\d+)\s+suggestions?/i.exec(resultText || '');
-  if (!m) return null;
+  // Global + last-match: the reviewer's own instructions require this as
+  // the closing line, but its report body can legitimately contain earlier
+  // text matching the same shape (an example, a quoted finding). Anchoring
+  // on the last occurrence picks the actual closing summary instead of
+  // whichever matches first.
+  const re = /(\d+)\s+bugs?,\s*(\d+)\s+security\s+issues?,\s*(\d+)\s+convention\s+violations?,\s*(\d+)\s+suggestions?/gi;
+  let m;
+  let last = null;
+  while ((m = re.exec(resultText || '')) !== null) last = m;
+  if (!last) return null;
   return {
-    bugs: Number(m[1]),
-    security: Number(m[2]),
-    convention: Number(m[3]),
-    suggestions: Number(m[4]),
+    bugs: Number(last[1]),
+    security: Number(last[2]),
+    convention: Number(last[3]),
+    suggestions: Number(last[4]),
   };
 }
 
@@ -201,7 +212,16 @@ async function main() {
     process.exit(1);
   }
   if (result.error) {
-    return skip(`claude invocation failed to start (${result.error.message})`);
+    // ENOENT means the binary genuinely isn't there to run — a legitimate
+    // skip. Anything else (e.g. E2BIG on a huge prompt, ENOBUFS past the 32
+    // MiB output cap) means claude did start, so treating it as a skip
+    // would post a false "success" for a review that never completed.
+    if (result.error.code === 'ENOENT') {
+      return skip(`claude invocation failed to start (${result.error.message})`);
+    }
+    log(`claude invocation errored (${result.error.code || 'unknown'}): ${result.error.message}`);
+    await postStatus('failure', `reviewer invocation errored: ${result.error.message}`);
+    process.exit(1);
   }
   if (result.status !== 0) {
     const stderr = (result.stderr || '').trim();
