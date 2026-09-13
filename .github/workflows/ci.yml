@@ -44,6 +44,8 @@ jobs:
         run: .claude/hooks/tests/session-start.test.sh
       - name: reviewer-clean-check unit tests
         run: node scripts/tests/reviewer-clean-check.test.js
+      - name: changelog tooling unit tests (containment, symlinks, crash-safety)
+        run: node scripts/tests/changelog.test.js
       - name: LF line endings enforced
         run: |
           if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then

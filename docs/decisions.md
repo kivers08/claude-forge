@@ -357,6 +357,22 @@ no-op) or when any fragment fails shape validation, pointing at
 `scripts/validate-changelog.js` for details rather than assembling malformed
 input.
 
+Hardened (2026-09-13, U11, after Copilot's review of PR #9 was verified
+against the current tree): `changelog.fragmentsDir` and `changelog.file`
+are contained both lexically and physically (`resolveInside` — `path.resolve`
+plus a realpath check of the deepest existing ancestor, so a committed
+symlink cannot point either outside the repo); a symlinked or irregular
+fragment, a symlinked fragments directory, or a symlinked/non-regular
+changelog target is a hard error; fragment listing uses `lstat`, not Dirent
+type flags (which are all false on `DT_UNKNOWN` filesystems). Close-out is
+crash-safe: fragments move into `changelog.d/.closeout-staging/` first, the
+changelog is written via `CHANGELOG.md.tmp` created with `O_EXCL` and
+renamed into place, staging is removed last; a run that finds staging
+non-empty refuses (and, if a `PUBLISHED` marker is present, states that the
+previous run's write did succeed); a failed publish restores fragments and
+never deletes one it could not restore. Every refusal is an `error:` line,
+exit 1. `scripts/tests/changelog.test.js` pins all of it.
+
 This is on-demand only — invoked by a human or an agent explicitly running
 it. It is not wired into CI, a git hook, or any automatic trigger; the full
 sequence (implement → review → changelog close-out → merge) is formalized by

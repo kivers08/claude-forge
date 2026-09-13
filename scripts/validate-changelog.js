@@ -8,17 +8,29 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseFragment, listFragmentFiles } = require('./lib/changelog-fragment');
+const { parseFragment, listFragmentFiles, resolveInside } = require('./lib/changelog-fragment');
 const { load, get } = require('../plugins/forge/hooks/lib/config');
 
-const ROOT = path.resolve(__dirname, '..');
+// FORGE_REPO_ROOT lets tests point this at a fixture repo; normally the repo
+// root, one level up from scripts/.
+const ROOT = process.env.FORGE_REPO_ROOT
+  ? path.resolve(process.env.FORGE_REPO_ROOT)
+  : path.resolve(__dirname, '..');
 // D12/D21: changelog.d/ location is project-configurable
 // (changelog.fragmentsDir in .claude/forge.json), defaulting to
 // 'changelog.d' — this repo itself has no forge.json, so it always falls
 // through to that default, but a project that adopts forge and sets this
 // key must have it honored here, not silently ignored.
 const { config } = load(ROOT);
-const DIR = path.join(ROOT, get(config, 'changelog.fragmentsDir', 'changelog.d'));
+// Contained, not joined: see resolveInside for why a PR-controlled
+// .claude/forge.json must not be able to point this outside the checkout.
+let DIR;
+try {
+  DIR = resolveInside(ROOT, get(config, 'changelog.fragmentsDir', 'changelog.d'), 'changelog.fragmentsDir');
+} catch (e) {
+  console.error(`error: ${e.message}`);
+  process.exit(1);
+}
 
 function rel(p) {
   return path.relative(ROOT, p).split(path.sep).join('/');
@@ -29,11 +41,19 @@ if (!fs.existsSync(DIR)) {
   process.exit(1);
 }
 
-const files = listFragmentFiles(DIR);
+// A symlinked or otherwise irregular fragment throws from the lister or the
+// parser; that is a validation failure, reported like any other.
+let files;
 const allErrors = [];
-for (const file of files) {
-  const { errors } = parseFragment(file, ROOT);
-  allErrors.push(...errors);
+try {
+  files = listFragmentFiles(DIR, ROOT);
+  for (const file of files) {
+    const { errors } = parseFragment(file, ROOT);
+    allErrors.push(...errors);
+  }
+} catch (e) {
+  console.error(`error: ${e.message}`);
+  process.exit(1);
 }
 
 if (allErrors.length) {
