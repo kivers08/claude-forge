@@ -1,0 +1,1 @@
+- [hasUnquotedSequence quoting bypass](security_hasUnquotedSequence_bypass.md) — a single quoted word (e.g. `gh "pr" merge`) defeats merge-gate and any guard built on this helper; pre-existing, repo-wide.

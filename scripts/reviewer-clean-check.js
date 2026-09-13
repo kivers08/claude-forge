@@ -152,7 +152,20 @@ function parseSummary(resultText) {
   // text matching the same shape (an example, a quoted finding). Anchoring
   // on the last occurrence picks the actual closing summary instead of
   // whichever matches first.
-  const re = /(\d+)\s+bugs?,\s*(\d+)\s+security\s+issues?,\s*(\d+)\s+convention\s+violations?,\s*(\d+)\s+suggestions?/gi;
+  // Each count may carry a parenthetical annotation before its comma — a
+  // real reviewer wrote "4 security issues (1 pre-existing and already
+  // tracked)," and the strict form failed the whole check with "could not
+  // find the reviewer's required summary line", i.e. a required status
+  // failing for a formatting reason on a review that had in fact completed.
+  // The parenthetical is matched as a group rather than [^,]* so an
+  // annotation containing its own comma still parses. A trailing "and"
+  // before the last count is tolerated for the same reason.
+  const ann = '(?:\\s*\\([^)]*\\))?';
+  const re = new RegExp(
+    `(\\d+)\\s+bugs?${ann},\\s*(\\d+)\\s+security\\s+issues?${ann},\\s*`
+    + `(\\d+)\\s+convention\\s+violations?${ann},?\\s*(?:and\\s+)?(\\d+)\\s+suggestions?`,
+    'gi',
+  );
   let m;
   let last = null;
   while ((m = re.exec(resultText || '')) !== null) last = m;

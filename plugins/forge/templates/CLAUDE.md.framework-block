@@ -1,0 +1,82 @@
+<!-- forge:framework-block:start -->
+## forge: risk tiers, gates, and merge policy
+
+This project uses the `forge` plugin's tiered process. A unit's tier is
+resolved from its changed/expected paths against `.claude/forge.json`'s
+`tiers.T0`-`tiers.T3` path globs (`tiers.<T>.paths`). When a unit's paths
+span more than one tier, the **highest matching tier wins**. A path that
+matches no configured tier resolves to **T2** — app code is the safe
+default; a project's tier config never silently means "everything is T0."
+
+| Tier | Scope | Gates |
+| --- | --- | --- |
+| T0 | docs/bookkeeping: docs, tasks, changelog fragments, comment-only edits | validators + one reviewer pass per batch |
+| T1 | framework/config: `.claude/`, hooks, workflows, settings | hook harness + hook tests + reviewer + CI |
+| T2 | app code: `src/`, `tests/`, `scripts/` | implementer → test-writer → reviewer → CI |
+| T3 | money/auth/data/deploy: payments, webhook signatures, migrations, deploy config | T2 + security review + an owner-facing diff summary |
+
+The tier also resolves the worker agent's tool-call budget and the
+reviewer's model, via `tiers.<T>.budget` / `tiers.<T>.reviewModel` in
+`.claude/forge.json` (an explicit dispatch-prompt override always wins over
+either).
+
+### Merge policy: T0 auto-merge via CI, all tiers gated locally
+
+T0 PRs *can* get GitHub's own auto-merge enabled by CI once required checks
+are green, with a notification to the owner — no explicit human "merge" for
+that tier. **The plugin does not ship that CI job.** It is a reference
+implementation in the claude-forge repository (`scripts/t0-auto-merge.js` and
+its `ci.yml` job); a project that wants the fast path installs its own copy,
+and until it does, T0 PRs merge exactly like T1-T3. T1-T3 PRs always keep the
+explicit human "merge".
+
+The merge-gate hook itself carries **no tier exception**: every merge the
+agent runs into the base branch requires the human marker, T0 included.
+(Known gap, not a tier exception: the guard matches on *unquoted* tokens, so
+quoting one word — `gh "pr" merge 7 --squash` — currently slips past it
+entirely. Tracked as D27 and unfixed; the guarantee below is what the design
+intends, not yet what the code enforces.) The
+two are not in tension, because they act in different places. The hook gates
+the *agent's* own `gh pr merge`. The T0 fast path is performed by the CI job,
+which never goes through the hook and resolves its inputs from the base ref.
+So the agent never needs a carve-out to get T0 PRs merged — CI does it.
+
+That separation is deliberate. An earlier design let the hook skip the marker
+when it parsed `--auto` out of the command line and the diff resolved to T0.
+Deciding a security question by hand-parsing another tool's flag grammar
+proved repeatedly wrong (quoted tokens, value positions, shorthand spellings,
+clustered shorthands — each fix closed one and missed another), so the
+exception was removed from the hook rather than patched again.
+
+### Merge-gate contract
+
+The gate: nothing merges into the base branch (`git.baseBranch`, default
+`main`) without a human running `touch .git/claude-human-merge-ok` first —
+subject to the D27 tokenizer gap noted above, which is a bug to fix, not a
+sanctioned path.
+That marker is valid for 15 minutes from its mtime; a stale marker is
+treated the same as no marker — it was yesterday's decision, not today's.
+The gate also requires a squash merge (`git.squashOnly`, default `true`).
+It is scoped to the destination branch, not the tool: a PR or merge landing
+on any other branch (e.g. a child unit merging into an owner-chosen
+integration branch) is not gated here. When the destination can't be
+determined at all, the gate fails **closed** (treats it as the base
+branch) — the cost of a wrong call is one denied merge and a re-run; the
+other direction is an unreviewed merge to the base branch slipping through.
+
+### Configuration
+
+See `forge.md` (written alongside `.claude/forge.json` by `/forge:bootstrap`)
+for what each `forge.json` key controls and why this project's values were
+chosen.
+
+> **The T0 auto-merge exception requires branch protection.** Skipping the
+> human-merge marker for T0 is only safe because GitHub holds an `--auto`
+> merge until required status checks pass. If the base branch has no required
+> status checks configured, `--auto` merges as soon as the PR is mergeable and
+> the exception becomes an unconditional marker-free merge. The reference
+> job (`scripts/t0-auto-merge.js` in claude-forge) verifies this before
+> enabling auto-merge and declines when it is absent; any copy a project
+> installs must keep that check.
+
+<!-- forge:framework-block:end -->

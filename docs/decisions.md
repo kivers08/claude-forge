@@ -209,6 +209,49 @@ notification to the owner. T1–T3 keep the explicit human "merge" plus the
 merge-gate hook. The bootstrap-written CLAUDE.md framework block must state
 this T0 exception explicitly.
 
+**REVISED 2026-09-13: the merge-gate hook carries no T0 exception.** The
+original design let the hook skip the human marker when it parsed `--auto`
+out of the command and the diff resolved to T0. Deciding that by hand-parsing
+`gh`'s flag grammar proved wrong five times running — quoted tokens, value
+positions (`--body --auto`), the `-A` shorthand, and pflag clustered
+shorthands (`-sA --auto`) each let a DIRECT merge reach the exception, and
+each fix closed one spelling while missing another. The exception was removed
+rather than patched a sixth time.
+
+Nothing is lost by that. The hook gates the *agent's* own `gh pr merge`;
+the T0 fast path is performed by the CI job (`scripts/t0-auto-merge.js`),
+which never passes through the hook and resolves both its config and its
+decision code from the base ref. The agent never needed the carve-out to get
+T0 PRs merged. The gate is now unconditional — marker required at every tier
+— which removes flag parsing from the security path entirely.
+
+Caveat on "unconditional": the gate is unconditional *by tier*, but D27's
+tokenizer bypass (quoting one word of the command) still slips past the guard
+entirely, marker and all. That is a pre-existing bug rather than a sanctioned
+path, and the framework-block template now says so rather than promising
+adopting projects a guarantee the code does not yet enforce.
+
+**Follow-up unit (recorded 2026-09-13, not built): move the T0 job to its own
+workflow on `pull_request_target`.** Two review findings converge on it. (S1)
+Extracting the decision *code* from the base ref is necessary but not
+sufficient while the *workflow file* that runs it still comes from the PR's
+merge ref — a PR can add a step to the job that judges it. (S2) Listening for
+`ready_for_review` on the shared `ci.yml` trigger, with the other jobs skipped
+on that event, replaced their real check runs with `skipped` ones; branch
+protection counts skipped as success, so a draft that went red could be
+marked ready and auto-merge on that same event. That change was reverted.
+`pull_request_target` runs the workflow from the base ref with a write token,
+and the T0 job never needs to check out PR code (config, decision code and
+`gh` calls only), which is the one shape where that trigger is safe — and it
+can carry `types: [opened, synchronize, reopened, ready_for_review]` without
+touching the validation jobs. Until then, a T0 PR marked ready with no further
+push stays on the explicit-merge path.
+
+If a hook-side exception is ever wanted again it needs a different mechanism
+than command-line parsing (a proper pflag-grammar parser as its own tested
+module, or a signal that does not come from the command text at all), and its
+own unit.
+
 ### D20 — Branch protection = required status checks
 `main` is protected by required STATUS CHECKS (CI, `forge validators`,
 `reviewer clean`), not required approvals: the coordinator never approves.
@@ -335,6 +378,30 @@ Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
   silently disable the lessons half of the gate on any git hiccup. Note
   `git cat-file -e` is NOT usable for this — a path missing from the tree
   exits 128, the same as a real fault.
+
+**BLOCKER (verified 2026-09-13): branch protection is not available on this
+repository.** `GET /repos/kewi-development/claude-forge/branches/<b>/protection`
+and `GET /repos/.../rulesets` both return **403 "Upgrade to GitHub Pro or make
+this repository public"** — the repo is private in a free org. So required
+status checks cannot be enforced here at all, which undercuts a premise used
+in three places:
+
+- D20's required checks (`forge validators`, `reviewer clean`) can be *posted*
+  but never *required*, so nothing stops a merge that ignores them.
+- D19's T0 carve-out justifies skipping the human-merge marker with "GitHub
+  waits for required status checks in place of it". With no protection
+  available that argument cannot hold, so `t0-auto-merge.js` verifies the
+  precondition and stays dormant — correct, but it means the T0 fast path is
+  currently dead code on this repo.
+- The merge-gate hook (`plugins/forge/hooks/guards/merge-gate.js`) is
+  therefore the *only* actual enforcement, and it is local: it gates the
+  agent's own Bash calls, not a merge made in the GitHub UI or by another
+  client.
+
+Resolving this is the owner's call and needs one of: make the repo public,
+upgrade the org's plan, or accept local-only enforcement and stop describing
+these checks as required. Until then, treat "required status check" language
+in D19/D20/D26 as aspirational — this section included.
 
 ### D21 — Changelog fragments
 Each PR adds `changelog.d/<slug>.md` containing a section name and a bullet.

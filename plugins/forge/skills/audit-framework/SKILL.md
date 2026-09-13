@@ -19,7 +19,7 @@ either passes or names exactly what's wrong and where.
    directions of mismatch — an index line with no matching body anchor, and
    a body entry missing from the index.
 2. **CLAUDE.md framework-block drift (D5).** Diff the project's CLAUDE.md
-   marker-delimited framework block against the plugin's own canonical copy
+   marker-delimited framework block against the plugin's own canonical copy (`${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.md.framework-block`, the text between `<!-- forge:framework-block:start -->` and `<!-- forge:framework-block:end -->`)
    (the block `bootstrap` writes from). Report any divergence line-by-line —
    this catches hand-edits that will be silently overwritten by a future
    `bootstrap` re-run, or drift that means the project is running on

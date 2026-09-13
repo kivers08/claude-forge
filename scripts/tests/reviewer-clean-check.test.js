@@ -99,6 +99,24 @@ test('keeps the LAST match when the body restates the shape', () => {
   assert.deepStrictEqual(parseSummary(text), { bugs: 0, security: 0, convention: 0, suggestions: 3 });
 });
 
+test('tolerates a parenthetical annotation on a count (the real CI failure)', () => {
+  // Verbatim from a real reviewer run; the strict form failed the whole
+  // required check with "could not find the reviewer's required summary line".
+  const s = parseSummary('2 bugs, 4 security issues (1 pre-existing and already tracked), 1 convention violation, 2 suggestions.');
+  assert.deepStrictEqual(s, { bugs: 2, security: 4, convention: 1, suggestions: 2 });
+});
+
+test('tolerates an annotation containing a comma, and a trailing "and"', () => {
+  assert.deepStrictEqual(
+    parseSummary('1 bug, 2 security issues (1 pre-existing, tracked), 0 convention violations, 3 suggestions.'),
+    { bugs: 1, security: 2, convention: 0, suggestions: 3 },
+  );
+  assert.deepStrictEqual(
+    parseSummary('1 bug, 0 security issues, 0 convention violations, and 2 suggestions.'),
+    { bugs: 1, security: 0, convention: 0, suggestions: 2 },
+  );
+});
+
 test('returns null when no summary line is present', () => {
   assert.strictEqual(parseSummary('Looks fine to me.'), null);
 });
