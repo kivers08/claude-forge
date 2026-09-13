@@ -370,3 +370,20 @@ unchanged. Row D is now fully confirmed for every check that applies to it
 (6 remains n/a, per the `CLAUDE_CODE_REMOTE` reasoning above). Rows A and B
 remain fully unrun. See `phase0-results.md`'s "Row D live-session
 confirmation" note for full detail.
+
+## Addendum 2026-09-12: pre-existing guard-tokenizer bypass found during D19 review
+
+### D27 — `hasUnquotedSequence` can be bypassed by quoting one word (not yet fixed)
+Discovered by the `forge:reviewer` agent while reviewing the D19 merge-gate
+T0 carve-out (`claude/u6-merge-gate-t0`, PR into `claude/units`). Any guard
+built on `plugins/forge/hooks/lib/segment-split.js`'s `hasUnquotedSequence`
+(e.g. `merge-gate`, `pr-create`) can be bypassed by quoting a single word of
+an otherwise-real command: `gh "pr" merge 7 --squash` runs identically to
+`gh pr merge 7 --squash` in bash, but the tokenizer marks `pr` as quoted, so
+the sequence match fails and the guard never fires — including the merge-gate
+marker requirement. Confirmed empirically (not just reasoned about); pre-dates
+D19 and every unit in this epic. Not introduced or worsened by D19; not fixed
+by it either. Needs its own unit: distinguish "this whole segment is one
+argument to another command" from "one word of a real command happens to be
+quoted" in `segment-split.js`, then re-verify every guard that depends on
+`hasUnquotedSequence`/`subcommandAfter`.
