@@ -1,0 +1,42 @@
+# Environment prep for the GitHub Copilot coding agent. GitHub runs the job
+# named `copilot-setup-steps` before the agent starts, and only reads this
+# file from the DEFAULT branch — which is why it lives on main.
+#
+# Why it exists: this repo enables its own `forge` plugin from a local-path
+# marketplace, and forge's PreToolUse guards (plugins/forge/hooks/pre-bash.js,
+# pre-write.js) are Node scripts registered on Bash and Edit/Write. In the
+# agent's container `node` was not on PATH, the hook failed to spawn, and the
+# harness treated a spawn failure as a block — so the agent could not run a
+# command or write a file at all. Installing Node makes the guards RUN rather
+# than disabling them: the coding agent is an actor with push access, which
+# is exactly what merge-gate exists to gate, so it should be held to the same
+# contract as every other session here.
+#
+# Deliberately not the alternative (`.claude/settings.local.json` with
+# `disableAllHooks: true`): that would exempt the one non-owner actor from
+# every guard.
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+  pull_request:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+
+jobs:
+  # The job MUST be named copilot-setup-steps or Copilot will not pick it up.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.x'
+      - name: prove the forge hooks can spawn
+        run: |
+          node --version
+          echo '{"tool_name":"Bash","tool_input":{"command":"echo ok"},"cwd":"'"$GITHUB_WORKSPACE"'"}' \
+            | node plugins/forge/hooks/pre-bash.js
