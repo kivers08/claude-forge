@@ -6,6 +6,15 @@ on:
   pull_request:
 
 jobs:
+  # Fork-PR safety (all jobs): a fork PR is arbitrary untrusted code that this
+  # workflow checks out and executes (validate-plugins.js, the hook test
+  # runners), so it must never land on the persistent self-hosted runner, which
+  # carries the owner's $HOME and `claude` login. `validate` and
+  # `forge-validators` therefore fall back to a GitHub-hosted runner for fork
+  # PRs rather than being skipped — the checks still have to run. `reviewer
+  # clean` is skipped outright instead, since it has no meaning without that
+  # machine's `claude` login. A repository Actions setting requiring approval
+  # for outside collaborators is the belt to this braces.
   validate:
     # Runs on the org's self-hosted corp runner (kewi-dev: self-hosted, Linux,
     # X64, dev; runner group Default) when the CORP_RUNNER repo/org variable
@@ -15,7 +24,7 @@ jobs:
     # token the default GITHUB_TOKEN doesn't have), so this variable is the
     # manual switch: flip it in Settings > Secrets and variables > Actions >
     # Variables when kewi-dev is up, flip it back if it goes down.
-    runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -33,6 +42,8 @@ jobs:
         run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
       - name: Project SessionStart hook unit tests
         run: .claude/hooks/tests/session-start.test.sh
+      - name: reviewer-clean-check unit tests
+        run: node scripts/tests/reviewer-clean-check.test.js
       - name: LF line endings enforced
         run: |
           if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then
@@ -69,7 +80,7 @@ jobs:
     # cannot disagree, and this is the check name branch protection will
     # eventually require (D20).
     name: forge validators
-    runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
+    runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -90,9 +101,21 @@ jobs:
     # scripts/reviewer-clean-check.js posts a graceful "success: skipped"
     # status rather than failing the build (same pattern as the two steps
     # above). Runs only for pull_request events, since there is no PR diff
-    # to review otherwise.
+    # to review otherwise. Also gated to same-repo PRs: this job lands on
+    # the persistent self-hosted runner and reuses the owner's `claude`
+    # login/HOME, so a fork PR (arbitrary untrusted code, not just diff
+    # content, checked out and executed by validate-plugins.js etc. before
+    # reviewer-clean-check.js even runs) must not reach that machine. A
+    # fork PR also can't post a status with a read-only GITHUB_TOKEN, so it
+    # could not go green here in any case. Note for D26: `reviewer clean` is
+    # an API-posted commit *status*, not this job's check run, so an
+    # if:-skipped job posts nothing at that context — the "a skipped job
+    # counts as success" rule does not apply. Once branch protection requires
+    # this context, fork PRs will block pending a human. That is the intended
+    # outcome, not an oversight: a fork PR is exactly the case that should not
+    # be able to self-certify.
     name: reviewer clean
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -105,6 +128,18 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # actions/checkout defaults to persist-credentials: true, which
+          # writes an http.extraheader carrying `Authorization: basic
+          # <base64 x-access-token:GITHUB_TOKEN>` into <workspace>/.git/config
+          # for the life of the job. reviewer-clean-check.js deliberately
+          # withholds GITHUB_TOKEN from the reviewer child's environment
+          # because the diff it reviews is untrusted PR content — but that
+          # scrub is bypassed on disk: .git/config sits inside --add-dir ROOT,
+          # so the child's Read/Grep tools cover it, and the job log prints the
+          # full reviewer output on every failure path. Actions masks the raw
+          # token, not its base64 form. This job never pushes, so dropping the
+          # credential entirely costs nothing.
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '22.x'

@@ -1,0 +1,4 @@
+# Transient scratch file written by scripts/reviewer-clean-check.js and
+# deleted in a `finally` block; only survives if the process is killed
+# before it can clean up (job cancel, runner restart).
+/.reviewer-clean-diff.txt

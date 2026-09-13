@@ -253,6 +253,88 @@ Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
   require. Turning required-status-check enforcement on for `main` is a
   separate, explicit owner decision (see the open `d26-branch-protection`
   draft).
+- **The verdict does not block; the mechanics do.** (Decided 2026-09-13,
+  after this unit's own PR.) The finding count is not reproducible run to
+  run: on PR #15 it ROSE — 1 bug/2 security to 2 bugs/3 security — after
+  every finding from the previous run had been fixed. The reviewer surfaces
+  a different subset of a large candidate set each time rather than
+  converging. A required check that cannot be driven green by fixing what it
+  reports is not a gate. So `reviewer-clean-check.js` posts `success` with
+  the counts in the description and the full report in the job log, whatever
+  the findings — and posts `failure` only for the reproducible faults: the
+  reviewer did not demonstrably read the diff (ack/token gate), the diff was
+  truncated, a git call failed, the base-ref system prompt was unreadable, or
+  the PR touches the reviewer's own instruction surface. Those are the half
+  of this check that can be an enforcing boundary, and they are the half that
+  is required under D26. Everything below still applies to the verdict half.
+- **Advisory, not a security boundary.** `reviewer clean`'s verdict is
+  model-authored text derived from untrusted PR diff content, then parsed
+  for pass/fail — so the diff itself is prompt-injection surface against
+  the gate (e.g. a planted line matching the required summary/ack format).
+  The hardening in U9 (`--restricted`, `--tools Read,Glob,Grep`,
+  `--strict-mcp-config`, a minimal child env, the diff/system-prompt both
+  read from trusted refs, and the unguessable-token `diff-resolved:` ack)
+  correctly limits *side effects* and catches an accidentally-skipped
+  review — it does not make the verdict itself trustworthy against a PR
+  deliberately trying to defeat it. Treat `reviewer clean` as a second
+  opinion against cooperative authors, not the enforcing check against an
+  adversarial one; `forge validators` (fully deterministic, no model in the
+  loop) is the check that fills that role.
+- **Enumerating the child's instruction inputs.** The system prompt is read
+  from the base ref, but the child still runs rooted in the PR-controlled
+  worktree (`cwd`/`--add-dir`). The criterion for this list is: loaded
+  automatically by the CLI **or** read on the base-ref prompt's own
+  instruction. Both halves matter, and the second is the larger one —
+  - auto-loaded: `CLAUDE.md` (project memory; also `CLAUDE.local.md`, and
+    non-root copies, which load when files in that subtree are read) and
+    `.claude/settings.json` / `.claude/settings.local.json` (project
+    settings still apply under `--restricted` — that is why `--settings
+    '{"disableAllHooks":true}'` was needed at all; `--settings` layers on
+    top rather than replacing);
+  - read on instruction: `.claude/forge.json`, which supplies
+    `agents.reviewer.extraChecks` — free text appended straight to the
+    reviewer's checklist, i.e. instruction injection through a config key —
+    plus `agents.reviewer.budget` and `readDiscipline.*`, where a budget of
+    `1` neuters the review with no prose at all; `.claude/rules/*.md`, cited
+    as authoritative conventions; and the configured `taskFiles.lessons`
+    file, which the prompt greps and quotes.
+  - listed pending verification: `.claude/skills/`, `.claude/agents/` and
+    `.claude/commands/`, which the CLI discovers from the project directory.
+    It is plausible their metadata is suppressed when the `Skill`/`Task`
+    tools aren't granted (this child gets `Read,Glob,Grep` only), but that is
+    unverified against the pinned runner CLI. The repo has none of them, so
+    listing them blocks nothing; re-check and record the answer rather than
+    leaving it ambiguous. `plugins/forge/skills/` is deliberately excluded —
+    per `.claude/settings.json` the plugin loads from the marketplace clone
+    of this repo, not the PR worktree, so a PR editing it cannot reach its
+    own review.
+
+  A PR touching any of these is writing trusted-position instructions for
+  the agent judging it, so `reviewer-clean-check.js` fails closed and defers
+  to a human. Deterministic path check (patterns, not exact strings), not a
+  model judgment; the lessons path is resolved from the **base** ref's
+  config so that moving the key cannot sidestep the check.
+  `plugins/forge/agents/reviewer.md` is deliberately not in that list — it
+  is already read from the base ref, so editing it cannot influence its own
+  review, and listing it would block every legitimate change to the reviewer
+  agent for no added protection. Residual: anything else the CLI may load
+  from the tree in a future version, or a future edit to the reviewer prompt
+  that tells the child to read something new — re-check this enumeration
+  when the pinned `claude` version moves or `reviewer.md` grows a new input.
+  One known gap is deliberate: `.claude/agent-memory/forge-reviewer/` is read
+  by the reviewer as prior lessons and so meets the criterion, but gating it
+  would block every legitimate memory update (the D19 unit contains one).
+  Closing it needs a design decision — probably reading agent memory from the
+  base ref, the way the system prompt already is — not a pattern-list entry.
+  Also note the paths are compared as raw bytes: `changedInstructionSurfaces`
+  runs `git diff` with `-z` and `core.quotePath=false` because git's default
+  quoting of non-ASCII paths would wrap them in `"` and defeat every anchor
+  in the pattern list. For the same reason, the base ref's config is read
+  with a `git ls-tree` probe first: `git show` exits non-zero both when the
+  file is absent and when git itself fails, and collapsing those would
+  silently disable the lessons half of the gate on any git hiccup. Note
+  `git cat-file -e` is NOT usable for this — a path missing from the tree
+  exits 128, the same as a real fault.
 
 ### D21 — Changelog fragments
 Each PR adds `changelog.d/<slug>.md` containing a section name and a bullet.
