@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/kewi-development/claude-forge/plugins/forge/schema/forge.schema.json",
+  "$id": "https://github.com/kivers08/claude-forge/plugins/forge/schema/forge.schema.json",
   "title": "forge project configuration",
   "description": "Project-side configuration for the forge plugin, stored at .claude/forge.json. Every value belongs to the project; the plugin ships none of them. Strict JSON, no comments, no unknown keys at any level.",
   "type": "object",
