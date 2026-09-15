@@ -11,6 +11,7 @@ const {
   parseSummary,
   verifyDiffResolvedAck,
   matchesInstructionSurface,
+  capText,
 } = require('../reviewer-clean-check.js');
 
 const BASE = '3e5422e9955e3af53f55d889e4f3932f454bde16';
@@ -225,6 +226,30 @@ test('accepts a markdown-emphasised ack line', () => {
 
 test('accepts a three-dot range', () => {
   assert.strictEqual(ack(`diff-resolved: ${BASE}...${HEAD} token=${TOKEN}`).ok, true);
+});
+
+console.log('capText (truncation gate — body blocks, file list only annotates in main()):');
+
+test('returns the text unchanged and truncated:false at or under the cap', () => {
+  const r = capText('abcde', 5, 'body');
+  assert.strictEqual(r.truncated, false);
+  assert.strictEqual(r.text, 'abcde');
+});
+
+test('truncated:true and an inline note once over the cap', () => {
+  const r = capText('abcdef', 5, 'body');
+  assert.strictEqual(r.truncated, true);
+  assert.ok(r.text.startsWith('abcde'), 'keeps the first `max` chars');
+  assert.ok(/\[TRUNCATED body — 5 of 6 chars shown\]/.test(r.text), 'names kind and both sizes');
+});
+
+test('one char over the cap already truncates (boundary)', () => {
+  assert.strictEqual(capText('x'.repeat(6), 5, 'file list').truncated, true);
+  assert.strictEqual(capText('x'.repeat(5), 5, 'file list').truncated, false);
+});
+
+test('the kind label distinguishes body from file list', () => {
+  assert.ok(capText('abcdef', 5, 'file list').text.includes('TRUNCATED file list —'));
 });
 
 if (failures > 0) {
