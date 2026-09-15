@@ -115,7 +115,7 @@ section: Fixed
   `synchronize` saw it already enabled and skipped the comment permanently —
   so the PR merged with nobody told, the one outcome the notification exists
   to prevent.
-- `autoMergeAlreadyEnabled()` is tri-state. Collapsing "couldn't tell" into
+- `autoMergeState()` is tri-state. Collapsing "couldn't tell" into
   "not enabled" re-posted the identical `cc @owner` comment on every push
   whenever `gh pr view` had a transient failure; unknown now counts as
   enabled for the comment, and as enabled for revocation too (attempting

@@ -30,7 +30,16 @@ const ROOT = process.env.FORGE_REPO_ROOT
 // 'CHANGELOG.md' — this repo itself has no forge.json, so it always falls
 // through to those defaults, but a project that adopts forge and sets
 // either key must have it honored here, not silently ignored.
-const { config } = load(ROOT);
+// Fail closed on a malformed config. load() returns a non-null `error` only
+// when .claude/forge.json exists but is unreadable/unparseable (missing is
+// error:null). This script DELETES fragments and OVERWRITES the changelog, so
+// falling through to the default changelog.d/CHANGELOG.md while the project's
+// real fragments sit unread elsewhere is the worst possible failure here.
+const { config, file, error } = load(ROOT);
+if (error) {
+  console.error(`error: ${file} could not be read: ${error}`);
+  process.exit(1);
+}
 // Contained, not joined: this script DELETES every *.md it enumerates and
 // overwrites the changelog path, so "../../" in either key must be refused,
 // not honoured. See resolveInside.

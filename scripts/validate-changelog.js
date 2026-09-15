@@ -21,7 +21,17 @@ const ROOT = process.env.FORGE_REPO_ROOT
 // 'changelog.d' — this repo itself has no forge.json, so it always falls
 // through to that default, but a project that adopts forge and sets this
 // key must have it honored here, not silently ignored.
-const { config } = load(ROOT);
+// Fail closed on a malformed config, don't fall through to defaults. load()
+// returns a non-null `error` only when .claude/forge.json exists but is
+// unreadable/unparseable (a missing file is error:null — the normal case).
+// Silently ignoring it would validate the DEFAULT changelog.d and print a
+// green `forge validators` status computed against a config it never read.
+// Matches t0-auto-merge.js's fail-closed posture with the same config.
+const { config, file, error } = load(ROOT);
+if (error) {
+  console.error(`error: ${file} could not be read: ${error}`);
+  process.exit(1);
+}
 // Contained, not joined: see resolveInside for why a PR-controlled
 // .claude/forge.json must not be able to point this outside the checkout.
 let DIR;

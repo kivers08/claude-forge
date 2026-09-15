@@ -37,6 +37,15 @@ if (a[0] === 'pr' && a[1] === 'view') {
 if (a[0] === 'pr' && a[1] === 'merge' && a.includes('--disable-auto')) {
   process.exit(process.env.STUB_DISABLE_FAIL ? 1 : 0);
 }
+if (a[0] === 'api' && /\\/branches\\//.test(a[1] || '')) {
+  // STUB_BRANCH: unset/"fail" => gh non-zero; "garbage" => 0 but unparseable
+  // stdout; anything else is written verbatim as the JSON payload body.
+  const mode = process.env.STUB_BRANCH;
+  if (mode === undefined || mode === 'fail') process.exit(1);
+  if (mode === 'garbage') { process.stdout.write('{ not json'); process.exit(0); }
+  process.stdout.write(mode + '\\n');
+  process.exit(0);
+}
 process.exit(1);
 `);
 fs.chmodSync(path.join(STUB_DIR, 'gh'), 0o755);
@@ -49,7 +58,7 @@ let failures = 0;
 function test(name, fn) {
   // Each case starts clean: no prior exit code, no prior stub state.
   process.exitCode = 0;
-  for (const k of ['STUB_VIEW', 'STUB_BY', 'STUB_DISABLE_FAIL']) delete process.env[k];
+  for (const k of ['STUB_VIEW', 'STUB_BY', 'STUB_DISABLE_FAIL', 'STUB_BRANCH', 'GITHUB_REPOSITORY']) delete process.env[k];
   try { fs.unlinkSync(`${STUB_LOG}.once`); } catch (_) { /* absent */ }
   fs.writeFileSync(STUB_LOG, '');
   // Capture log lines so assertions can check what was said.
@@ -201,6 +210,63 @@ test('no GITHUB_BASE_REF => null (cannot resolve the base ref config)', () => {
   } finally {
     if (saved !== undefined) process.env.GITHUB_BASE_REF = saved;
   }
+});
+
+console.log('baseHasRequiredChecks (the single precondition guarding the T0 marker-free merge):');
+
+// All paths must return false EXCEPT a branch that is both protected and has a
+// non-empty required-status-checks context list — anything less than that must
+// not let a T0 PR merge unattended.
+test('no GITHUB_REPOSITORY => false, and says why', (said) => {
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+  assert.ok(said.some((l) => /GITHUB_REPOSITORY not set/.test(l)), said.join('\n'));
+});
+
+test('gh non-zero => false (branch unreadable / protection endpoint 403)', (said) => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = 'fail';
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+  assert.ok(said.some((l) => /could not read branch "main"/.test(l)), said.join('\n'));
+});
+
+test('unparseable payload => false, and says why', (said) => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = 'garbage';
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+  assert.ok(said.some((l) => /could not parse the branch payload/.test(l)), said.join('\n'));
+});
+
+test('protected:false with non-empty contexts => false (protection off)', () => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = JSON.stringify({
+    protected: false,
+    protection: { required_status_checks: { contexts: ['reviewer clean'] } },
+  });
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+});
+
+test('protected:true but contexts:[] => false (nothing actually required)', () => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = JSON.stringify({
+    protected: true,
+    protection: { required_status_checks: { contexts: [] } },
+  });
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+});
+
+test('protected:true with required_status_checks absent => false', () => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = JSON.stringify({ protected: true, protection: {} });
+  assert.strictEqual(m.baseHasRequiredChecks('main'), false);
+});
+
+test('protected:true with a non-empty context list => true (the one true case)', () => {
+  process.env.GITHUB_REPOSITORY = 'o/r';
+  process.env.STUB_BRANCH = JSON.stringify({
+    protected: true,
+    protection: { required_status_checks: { contexts: ['reviewer clean', 'forge validators'] } },
+  });
+  assert.strictEqual(m.baseHasRequiredChecks('main'), true);
 });
 
 fs.rmSync(STUB_DIR, { recursive: true, force: true });
