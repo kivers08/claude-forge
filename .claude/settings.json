@@ -7,7 +7,7 @@
     "claude-forge": {
       "source": {
         "source": "github",
-        "repo": "kewi-development/claude-forge"
+        "repo": "kivers08/claude-forge"
       }
     }
   },

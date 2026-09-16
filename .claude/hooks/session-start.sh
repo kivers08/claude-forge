@@ -11,7 +11,7 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-claude plugin marketplace add kewi-development/claude-forge || {
+claude plugin marketplace add kivers08/claude-forge || {
   echo "forge session-start: marketplace add failed, plugins will not be available this session" >&2
   exit 1
 }

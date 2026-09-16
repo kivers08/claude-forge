@@ -116,7 +116,7 @@ there" model does not hold for fresh cloud containers. Persistent machines
 
 Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
 1. Cloud environment setup script runs
-   `claude plugin marketplace add kewi-development/claude-forge && claude plugin install forge@claude-forge`
+   `claude plugin marketplace add kivers08/claude-forge && claude plugin install forge@claude-forge`
    before each session. Environment-side, not repo-side; no vendoring. Needs
    the environment's git credentials to reach the private repo (the clone
    above worked in this container).
@@ -131,7 +131,7 @@ Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
    until restart, so this likely covers skills only.
 
 **Chosen: option 1 (D24).** The cloud environment runs
-`claude plugin marketplace add kewi-development/claude-forge && claude plugin
+`claude plugin marketplace add kivers08/claude-forge && claude plugin
 install forge@claude-forge` before each session. Option 3 (vendoring) stays the
 documented fallback if a real cloud row shows option 1 failing. Row C still runs
 — it decides whether check 6 fails as predicted, and whether auto memory is on.
@@ -153,7 +153,7 @@ neither plugin's hooks (session-start, guards, telemetry) ran for this
 session. Check 6 is FAIL on row C, not just "likely."
 
 Fixed for this session by hand:
-`claude plugin marketplace add kewi-development/claude-forge`, then
+`claude plugin marketplace add kivers08/claude-forge`, then
 `claude plugin install forge@claude-forge` and `...smoke@claude-forge`
 (both installed cleanly at user scope from `main`, commit `53116bc`).
 
@@ -362,7 +362,7 @@ Per row, after `git pull` on this branch (or after merge):
 
 1. Open a session in the repo. Note whether `/smoke:ping` is listed without any
    manual install (check 6 for C; check 1 for the rest). If not, run
-   `claude plugin marketplace add kewi-development/claude-forge` then
+   `claude plugin marketplace add kivers08/claude-forge` then
    `claude plugin install smoke@claude-forge` and note that you had to.
 2. Run `/smoke:ping` (2).
 3. Run any Bash command, then ask: "quote any additional context that came with

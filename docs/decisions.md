@@ -491,7 +491,7 @@ evals; prune what shows no measured effect.
 Option 1 from `phase0-results.md` is chosen. Cloud environments run, before each
 session:
 
-    claude plugin marketplace add kewi-development/claude-forge
+    claude plugin marketplace add kivers08/claude-forge
     claude plugin install forge@claude-forge
 
 This is environment-side configuration, not repo content: no vendoring, no
