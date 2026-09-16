@@ -56,18 +56,23 @@ security issues, N convention violations, N suggestions."
 
 ## 3. Fix loop
 
-**Blocking = bugs + security issues + convention violations.** This
-definition is not this skill's own invention — it is lifted verbatim from
-`scripts/reviewer-clean-check.js`'s `blocking` calculation (bare suggestions
-never block on their own, since the reviewer agent itself frames
-"suggestions" as its lowest severity). Keeping this skill's definition
-identical to what `reviewer-clean-check.js` actually enforces in CI is the
-point: a human-run pipeline that calls something "clean" by a looser
-standard than CI would just produce PRs that pass here and fail there.
+**Fix-worthy = bugs + security issues + convention violations** (bare
+suggestions never force a round on their own — the reviewer agent frames
+"suggestions" as its lowest severity).
 
-If blocking count is 0 after step 2, skip straight to step 4.
+Note the division of labour with CI. As of the D20 revision,
+`scripts/reviewer-clean-check.js` no longer blocks on the finding count: its
+verdict is advisory (it posts `success` with the counts in the description
+and fails only on reproducible mechanics faults — a missed ack/token, a
+truncated diff, a git fault, a touched instruction surface). So CI will not
+catch a unit shipped with open bugs — **this human-run pipeline is where
+finding-driven quality is actually enforced**, not a mirror of a CI gate.
+Don't call a unit clean with open bugs/security/convention findings just
+because CI will go green regardless.
 
-If blocking count is nonzero:
+If the fix-worthy count is 0 after step 2, skip straight to step 4.
+
+If it is nonzero:
 
 1. Dispatch `forge:bug-fixer` with the reviewer's specific findings (not a
    paraphrase — quote them), scoped to just those findings.
@@ -83,14 +88,14 @@ again with the same recipe.
 
 ## 4. Changelog close-out
 
-Once review is clean (0 blocking), add a `changelog.d/<unit>.md` fragment
+Once review is clean (0 fix-worthy), add a `changelog.d/<unit>.md` fragment
 yourself (the coordinator's own job — `scripts/changelog-closeout.js`'s own
 doc comment names this as "on-demand only... not wired into CI," i.e. a step
 a human or coordinating agent runs deliberately, not something a worker
 agent or a script does for you). Match the shape in `changelog.d/README.md`:
 
 ```
-section: Added | Changed | Fixed | Removed | Docs
+section: Added | Changed | Fixed | Removed | Docs | Security
 - one bullet per change, present tense, no PR number needed
 ```
 
@@ -138,7 +143,7 @@ for you. Four required fields:
 - **what changed** — a short prose summary plus
   `git diff <base>...HEAD --stat`.
 - **what verified it** — which checks/tests ran and passed, the final
-  review round's blocking count (must be 0 to reach this step), and how many
+  review round's fix-worthy count (must be 0 to reach this step), and how many
   fix-and-re-review rounds it took (0, 1, or 2).
 - **risks** — anything flagged in step 5, any non-blocking reviewer
   suggestions left unaddressed, and anything the implementer's (or
@@ -175,10 +180,11 @@ merge.
 
 ## Hard constraints
 
-- Never call a unit "clean" using a looser blocking definition than
-  `scripts/reviewer-clean-check.js` actually enforces — if that script's
-  definition ever changes, this skill's step 3 is wrong until updated to
-  match, not the other way around.
+- Never call a unit "clean" with open bugs, security issues, or convention
+  violations. Since the D20 revision, CI's `reviewer clean` is advisory and
+  will go green regardless of the finding count, so this pipeline — not CI —
+  is what actually holds that line. A green CI status is not evidence the
+  findings were addressed.
 - Never skip step 5 because the diff "looks small" — the check itself is
   cheap; the point is to never let coordination-branch drift surface for the
   first time as a merge conflict during an actual merge attempt.

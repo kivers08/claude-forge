@@ -181,10 +181,6 @@ function isOurGrant(by) {
   return typeof by === 'string' && /^github-actions(\[bot\])?$/.test(by);
 }
 
-function autoMergeAlreadyEnabled(prNumber) {
-  return autoMergeState(prNumber).enabled;
-}
-
 // Turns auto-merge back off. Every early return below that means "this PR may
 // NOT take the T0 fast path" must call this, because GitHub does not clear
 // auto-merge on an ordinary push: a docs-only PR that resolved T0 and got
@@ -364,7 +360,7 @@ function main() {
   const comment = spawnSync('gh', ['pr', 'comment', String(prNumber), '--body', body], { encoding: 'utf8' });
   if (comment.error || comment.status !== 0) {
     // Auto-merge is already on at this point, and on the next `synchronize`
-    // run autoMergeAlreadyEnabled() would report true and skip the comment
+    // run autoMergeState() would report enabled and skip the comment
     // forever — so the PR would merge with nobody told, which is the one
     // outcome D19 says this notification exists to prevent. Revoke instead
     // and let the PR fall back to the explicit-merge path.
@@ -381,6 +377,6 @@ if (require.main === module) {
   // whether a PR may skip the human-merge marker, so its pieces should be
   // reachable from a test without running the whole job.
   module.exports = {
-    baseConfig, baseHasRequiredChecks, autoMergeState, autoMergeAlreadyEnabled, revokeAutoMergeIfEnabled, isOurGrant,
+    baseConfig, baseHasRequiredChecks, autoMergeState, revokeAutoMergeIfEnabled, isOurGrant,
   };
 }
