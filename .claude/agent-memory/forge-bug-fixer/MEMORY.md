@@ -1,0 +1,2 @@
+- [claude -p flag semantics](flag_semantics_claude_cli.md) — `--tools` only takes bare tool names, not scoped `Bash(cmd:*)`; `--restricted` doesn't strip MCP servers alone.
+- [Headless reviewer trailing git-commentary risk](headless_reviewer_git_commentary.md) — a git-status-aware final turn can overwrite the reviewer's real report in `--output-format json`'s `result` field.

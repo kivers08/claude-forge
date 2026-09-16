@@ -28,7 +28,7 @@ projects on any stack. Version 0.0.1. See `CHANGELOG.md`.
 ## Install in another project
 
 ```
-claude plugin marketplace add kewi-development/claude-forge
+claude plugin marketplace add kivers08/claude-forge
 claude plugin install forge@claude-forge
 ```
 
@@ -38,7 +38,7 @@ on folder trust:
 ```json
 {
   "extraKnownMarketplaces": {
-    "claude-forge": { "source": { "source": "github", "repo": "kewi-development/claude-forge" } }
+    "claude-forge": { "source": { "source": "github", "repo": "kivers08/claude-forge" } }
   },
   "enabledPlugins": { "forge@claude-forge": true }
 }
@@ -54,7 +54,7 @@ plugin in a fresh cloud container (Phase 0 check 6). Per D24, the cloud
 environment's setup script must run, before each session:
 
 ```
-claude plugin marketplace add kewi-development/claude-forge
+claude plugin marketplace add kivers08/claude-forge
 claude plugin install forge@claude-forge
 ```
 

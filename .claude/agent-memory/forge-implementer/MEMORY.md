@@ -1,0 +1,3 @@
+- [Child unit branch convention](project_child_unit_branches.md) — unit branches PR into the parent unit branch, not main; confirm with dispatch prompt + `git branch --show-current`.
+- [Local testing scope](feedback_local_testing_scope.md) — scoped tests on touched files only; full CI suite runs belong on the self-hosted runner, not this session.
+- [D19 T0 auto-merge notes](project_d19_t0_automerge_notes.md) — no owner-mention convention exists yet (used gh api user as default); merge_pull_request MCP tool has no auto-merge field, so it stays fully gated.

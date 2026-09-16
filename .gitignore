@@ -1,0 +1,14 @@
+# Transient scratch file written by scripts/reviewer-clean-check.js and
+# deleted in a `finally` block; only survives if the process is killed
+# before it can clean up (job cancel, runner restart).
+/.reviewer-clean-diff.txt
+
+# Close-out artifacts (scripts/changelog-closeout.js). Both exist only for the
+# duration of a run and are removed on success; they survive a killed run, in
+# which case the next run refuses to start and names them.
+# NOTE: these track the DEFAULT paths only. changelog.fragmentsDir and
+# changelog.file are project-configurable (D12/D21); a project that overrides
+# either gets its staging dir / temp file under the configured location and
+# should add the matching entries here itself.
+/changelog.d/.closeout-staging/
+/CHANGELOG.md.tmp

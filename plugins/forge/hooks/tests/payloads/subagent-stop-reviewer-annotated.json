@@ -1,0 +1,14 @@
+{
+  "session_id": "5f0b1c2a-0000-4000-8000-00000000000e",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a.jsonl",
+  "cwd": "/home/user/project",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent-004",
+  "agent_type": "reviewer",
+  "agent_transcript_path": "/home/user/.claude/projects/-home-user-project/5f0b1c2a/subagents/agent-agent-004.jsonl",
+  "last_assistant_message": "### Findings\n\n- **Security**: 1 finding is pre-existing\n\nSummary: 2 bugs, 4 security issues (1 pre-existing and already tracked), 1 convention violation, 2 suggestions.\n\n### LEARNING\nagent: reviewer\ndate: 2026-09-15\nbranch: claude/example\nmistake: none\n",
+  "background_tasks": [],
+  "session_crons": []
+}

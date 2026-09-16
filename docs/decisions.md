@@ -209,11 +209,219 @@ notification to the owner. T1–T3 keep the explicit human "merge" plus the
 merge-gate hook. The bootstrap-written CLAUDE.md framework block must state
 this T0 exception explicitly.
 
+**REVISED 2026-09-13: the merge-gate hook carries no T0 exception.** The
+original design let the hook skip the human marker when it parsed `--auto`
+out of the command and the diff resolved to T0. Deciding that by hand-parsing
+`gh`'s flag grammar proved wrong five times running — quoted tokens, value
+positions (`--body --auto`), the `-A` shorthand, and pflag clustered
+shorthands (`-sA --auto`) each let a DIRECT merge reach the exception, and
+each fix closed one spelling while missing another. The exception was removed
+rather than patched a sixth time.
+
+Nothing is lost by that. The hook gates the *agent's* own `gh pr merge`;
+the T0 fast path is performed by the CI job (`scripts/t0-auto-merge.js`),
+which never passes through the hook and resolves both its config and its
+decision code from the base ref. The agent never needed the carve-out to get
+T0 PRs merged. The gate is now unconditional — marker required at every tier
+— which removes flag parsing from the security path entirely.
+
+Caveat on "unconditional": the gate is unconditional *by tier*, but D27's
+tokenizer bypass (quoting one word of the command) still slips past the guard
+entirely, marker and all. That is a pre-existing bug rather than a sanctioned
+path, and the framework-block template now says so rather than promising
+adopting projects a guarantee the code does not yet enforce.
+
+**Follow-up unit (recorded 2026-09-13, not built): move the T0 job to its own
+workflow on `pull_request_target`.** Two review findings converge on it. (S1)
+Extracting the decision *code* from the base ref is necessary but not
+sufficient while the *workflow file* that runs it still comes from the PR's
+merge ref — a PR can add a step to the job that judges it. (S2) Listening for
+`ready_for_review` on the shared `ci.yml` trigger, with the other jobs skipped
+on that event, replaced their real check runs with `skipped` ones; branch
+protection counts skipped as success, so a draft that went red could be
+marked ready and auto-merge on that same event. That change was reverted.
+`pull_request_target` runs the workflow from the base ref with a write token,
+and the T0 job never needs to check out PR code (config, decision code and
+`gh` calls only), which is the one shape where that trigger is safe — and it
+can carry `types: [opened, synchronize, reopened, ready_for_review]` without
+touching the validation jobs. Until then, a T0 PR marked ready with no further
+push stays on the explicit-merge path.
+
+If a hook-side exception is ever wanted again it needs a different mechanism
+than command-line parsing (a proper pflag-grammar parser as its own tested
+module, or a signal that does not come from the command text at all), and its
+own unit.
+
 ### D20 — Branch protection = required status checks
 `main` is protected by required STATUS CHECKS (CI, `forge validators`,
 `reviewer clean`), not required approvals: the coordinator never approves.
 Design note for U3/U5: the plugin (via CI) posts a `forge validators` check
-run and a `reviewer clean` commit status. Recorded now; built later.
+run and a `reviewer clean` commit status.
+
+Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
+`scripts/reviewer-clean-check.js`):
+- **`forge validators`** — a required (fails the build on any problem),
+  fully deterministic job. Runs `validate-plugins.js --strict` (manifest and
+  frontmatter shape) plus a new dependency-free changelog fragment shape
+  check (D21): every `changelog.d/*.md` except `README.md` must parse as one
+  or more `section: <name>` blocks each followed by at least one `- `
+  bullet.
+- **`reviewer clean`** — dispatches the `forge:reviewer` agent headlessly
+  (`claude -p`, fed `agents/reviewer.md`'s own body as the system prompt,
+  same "full" mode the `review` skill defaults to) against the PR's diff,
+  then posts a commit status (`success`/`failure`) via the GitHub statuses
+  API. Blocking = bugs + security issues + convention violations from the
+  reviewer's own closing summary line; bare suggestions don't block.
+- **`forge validators` always runs; only `reviewer clean` skips off
+  self-hosted.** Both jobs reuse the exact `CORP_RUNNER` repo/org variable
+  gate `ci.yml`'s `validate` job already uses, but only to pick *which*
+  runner they land on. `forge validators` is pure, dependency-free Node
+  with no external CLI/auth requirement, so it always runs both of its
+  checks regardless of runner — gating a required, deterministic check
+  behind runner availability would let it silently no-op on the exact
+  fallback path it exists to still catch problems on. `reviewer clean` is
+  the one that conditionally skips: its script checks `CORP_RUNNER` itself
+  before dispatching the reviewer agent, and posts a `success` status with
+  a `skipped: <reason>` description instead of failing the build when it's
+  off the self-hosted runner. This mirrors the existing "claude plugin
+  validate --strict" CI step's `continue-on-error` fallback.
+- **No new secret.** `reviewer clean` authenticates by reusing whatever
+  `claude` login already exists on the self-hosted runner (the owner's
+  Claude subscription, not an API key) and posts to GitHub with the
+  workflow's own `GITHUB_TOKEN`. If `claude` isn't on PATH or isn't
+  authenticated, it skips gracefully the same way as the CORP_RUNNER-unset
+  case — no `ANTHROPIC_API_KEY` or other secret was added.
+- **Not yet enforced.** No branch-protection ruleset was created or changed
+  by this work — it only builds the mechanism a future ruleset would
+  require. Turning required-status-check enforcement on for `main` is a
+  separate, explicit owner decision (see the open `d26-branch-protection`
+  draft).
+- **The verdict does not block; the mechanics do.** (Decided 2026-09-13,
+  after this unit's own PR.) The finding count is not reproducible run to
+  run: on PR #15 it ROSE — 1 bug/2 security to 2 bugs/3 security — after
+  every finding from the previous run had been fixed. The reviewer surfaces
+  a different subset of a large candidate set each time rather than
+  converging. A required check that cannot be driven green by fixing what it
+  reports is not a gate. So `reviewer-clean-check.js` posts `success` with
+  the counts in the description and the full report in the job log, whatever
+  the findings — and posts `failure` only for the reproducible faults: the
+  reviewer did not demonstrably read the diff (ack/token gate), the diff was
+  truncated, a git call failed, the base-ref system prompt was unreadable, or
+  the PR touches the reviewer's own instruction surface. Those are the half
+  of this check that can be an enforcing boundary, and they are the half that
+  is required under D26. Everything below still applies to the verdict half.
+- **The mechanics only enforce if their CODE is not PR-controlled.** (Added
+  2026-09-15, U13, from an advisory finding on PR #9.) The faults above are
+  only a boundary if a PR cannot delete the code that raises them. The
+  `reviewer-clean` job checks out the PR, so running
+  `scripts/reviewer-clean-check.js` from that checkout let a PR strip its own
+  ack/token/truncation/instruction-surface gates and post `success`. Closed
+  the same way the T0 job (D19) closes it for its merge decision: the job now
+  extracts `scripts` from `origin/<base>` into `$RUNNER_TEMP` and runs that
+  copy, with `FORGE_REPO_ROOT` pointing it at the PR checkout for git/diff/
+  `--add-dir` (the script gained the same override `t0-auto-merge.js` has). A
+  one-commit bootstrap fallback runs the PR's own copy only while the base
+  ref predates the `FORGE_REPO_ROOT` marker. **Residual, not closed here:** the
+  *workflow file itself* still comes from the PR's merge ref, so a PR can
+  append a step to the job and post the status directly, or `.github/workflows`
+  is not in the instruction-surface list (adding it would fail every
+  legitimate CI change, and it is a weak half-measure regardless). The only
+  real closure is a `pull_request_target` workflow plus branch protection on
+  `.github/workflows/` — the same D19 follow-up the T0 job is already waiting
+  on. Until then, this check (like the T0 job) is hardened against a PR
+  *rewriting the logic*, not against one *appending to the job*.
+- **Advisory, not a security boundary.** `reviewer clean`'s verdict is
+  model-authored text derived from untrusted PR diff content, then parsed
+  for pass/fail — so the diff itself is prompt-injection surface against
+  the gate (e.g. a planted line matching the required summary/ack format).
+  The hardening in U9 (`--restricted`, `--tools Read,Glob,Grep`,
+  `--strict-mcp-config`, a minimal child env, the diff/system-prompt both
+  read from trusted refs, and the unguessable-token `diff-resolved:` ack)
+  correctly limits *side effects* and catches an accidentally-skipped
+  review — it does not make the verdict itself trustworthy against a PR
+  deliberately trying to defeat it. Treat `reviewer clean` as a second
+  opinion against cooperative authors, not the enforcing check against an
+  adversarial one; `forge validators` (fully deterministic, no model in the
+  loop) is the check that fills that role.
+- **Enumerating the child's instruction inputs.** The system prompt is read
+  from the base ref, but the child still runs rooted in the PR-controlled
+  worktree (`cwd`/`--add-dir`). The criterion for this list is: loaded
+  automatically by the CLI **or** read on the base-ref prompt's own
+  instruction. Both halves matter, and the second is the larger one —
+  - auto-loaded: `CLAUDE.md` (project memory; also `CLAUDE.local.md`, and
+    non-root copies, which load when files in that subtree are read) and
+    `.claude/settings.json` / `.claude/settings.local.json` (project
+    settings still apply under `--restricted` — that is why `--settings
+    '{"disableAllHooks":true}'` was needed at all; `--settings` layers on
+    top rather than replacing);
+  - read on instruction: `.claude/forge.json`, which supplies
+    `agents.reviewer.extraChecks` — free text appended straight to the
+    reviewer's checklist, i.e. instruction injection through a config key —
+    plus `agents.reviewer.budget` and `readDiscipline.*`, where a budget of
+    `1` neuters the review with no prose at all; `.claude/rules/*.md`, cited
+    as authoritative conventions; and the configured `taskFiles.lessons`
+    file, which the prompt greps and quotes.
+  - listed pending verification: `.claude/skills/`, `.claude/agents/` and
+    `.claude/commands/`, which the CLI discovers from the project directory.
+    It is plausible their metadata is suppressed when the `Skill`/`Task`
+    tools aren't granted (this child gets `Read,Glob,Grep` only), but that is
+    unverified against the pinned runner CLI. The repo has none of them, so
+    listing them blocks nothing; re-check and record the answer rather than
+    leaving it ambiguous. `plugins/forge/skills/` is deliberately excluded —
+    per `.claude/settings.json` the plugin loads from the marketplace clone
+    of this repo, not the PR worktree, so a PR editing it cannot reach its
+    own review.
+
+  A PR touching any of these is writing trusted-position instructions for
+  the agent judging it, so `reviewer-clean-check.js` fails closed and defers
+  to a human. Deterministic path check (patterns, not exact strings), not a
+  model judgment; the lessons path is resolved from the **base** ref's
+  config so that moving the key cannot sidestep the check.
+  `plugins/forge/agents/reviewer.md` is deliberately not in that list — it
+  is already read from the base ref, so editing it cannot influence its own
+  review, and listing it would block every legitimate change to the reviewer
+  agent for no added protection. Residual: anything else the CLI may load
+  from the tree in a future version, or a future edit to the reviewer prompt
+  that tells the child to read something new — re-check this enumeration
+  when the pinned `claude` version moves or `reviewer.md` grows a new input.
+  One known gap is deliberate: `.claude/agent-memory/forge-reviewer/` is read
+  by the reviewer as prior lessons and so meets the criterion, but gating it
+  would block every legitimate memory update (the D19 unit contains one).
+  Closing it needs a design decision — probably reading agent memory from the
+  base ref, the way the system prompt already is — not a pattern-list entry.
+  Also note the paths are compared as raw bytes: `changedInstructionSurfaces`
+  runs `git diff` with `-z` and `core.quotePath=false` because git's default
+  quoting of non-ASCII paths would wrap them in `"` and defeat every anchor
+  in the pattern list. For the same reason, the base ref's config is read
+  with a `git ls-tree` probe first: `git show` exits non-zero both when the
+  file is absent and when git itself fails, and collapsing those would
+  silently disable the lessons half of the gate on any git hiccup. Note
+  `git cat-file -e` is NOT usable for this — a path missing from the tree
+  exits 128, the same as a real fault.
+
+**BLOCKER (verified 2026-09-13): branch protection is not available on this
+repository.** `GET /repos/kewi-development/claude-forge/branches/<b>/protection`
+and `GET /repos/.../rulesets` both return **403 "Upgrade to GitHub Pro or make
+this repository public"** — the repo is private in a free org. So required
+status checks cannot be enforced here at all, which undercuts a premise used
+in three places:
+
+- D20's required checks (`forge validators`, `reviewer clean`) can be *posted*
+  but never *required*, so nothing stops a merge that ignores them.
+- D19's T0 carve-out justifies skipping the human-merge marker with "GitHub
+  waits for required status checks in place of it". With no protection
+  available that argument cannot hold, so `t0-auto-merge.js` verifies the
+  precondition and stays dormant — correct, but it means the T0 fast path is
+  currently dead code on this repo.
+- The merge-gate hook (`plugins/forge/hooks/guards/merge-gate.js`) is
+  therefore the *only* actual enforcement, and it is local: it gates the
+  agent's own Bash calls, not a merge made in the GitHub UI or by another
+  client.
+
+Resolving this is the owner's call and needs one of: make the repo public,
+upgrade the org's plan, or accept local-only enforcement and stop describing
+these checks as required. Until then, treat "required status check" language
+in D19/D20/D26 as aspirational — this section included.
 
 ### D21 — Changelog fragments
 Each PR adds `changelog.d/<slug>.md` containing a section name and a bullet.
@@ -221,10 +429,57 @@ The close-out step assembles fragments into the dated header at merge and
 deletes them. Schema gains `changelog.file` and `changelog.fragmentsDir`. The
 audit-framework validator checks fragments are well-formed.
 
-### D22 — Pipelines as code (design note only)
+Built: `scripts/changelog-closeout.js` (dependency-free Node script). Parses
+every fragment in `changelog.d/` (all `.md` files except `README.md`) using
+the same fragment shape as `changelog.d/README.md` describes (`section:
+<Name>` lines followed by `- bullet` lines, indented continuations allowed),
+groups bullets by section name in first-encountered order across fragments
+(processed in sorted filename order for determinism), and prepends a `##
+YYYY-MM-DD` section — with a `### <section>` sub-header per section name
+found, no fixed whitelist — directly under the `# Changelog` H1 in
+`CHANGELOG.md`, above whatever content is already there. On success it
+deletes the fragments it just assembled. It refuses to run (exit 1, no
+changes made) when there are zero fragments to assemble (clean idempotent
+no-op) or when any fragment fails shape validation, pointing at
+`scripts/validate-changelog.js` for details rather than assembling malformed
+input.
+
+Hardened (2026-09-13, U11, after Copilot's review of PR #9 was verified
+against the current tree): `changelog.fragmentsDir` and `changelog.file`
+are contained both lexically and physically (`resolveInside` — `path.resolve`
+plus a realpath check of the deepest existing ancestor, so a committed
+symlink cannot point either outside the repo); a symlinked or irregular
+fragment, a symlinked fragments directory, or a symlinked/non-regular
+changelog target is a hard error; fragment listing uses `lstat`, not Dirent
+type flags (which are all false on `DT_UNKNOWN` filesystems). Close-out is
+crash-safe: fragments move into `changelog.d/.closeout-staging/` first, the
+changelog is written via `CHANGELOG.md.tmp` created with `O_EXCL` and
+renamed into place, staging is removed last; a run that finds staging
+non-empty refuses (and, if a `PUBLISHED` marker is present, states that the
+previous run's write did succeed); a failed publish restores fragments and
+never deletes one it could not restore. Every refusal is an `error:` line,
+exit 1. `scripts/tests/changelog.test.js` pins all of it.
+
+This is on-demand only — invoked by a human or an agent explicitly running
+it. It is not wired into CI, a git hook, or any automatic trigger; the full
+sequence (implement → review → changelog close-out → merge) is formalized by
+D22 below.
+
+### D22 — Pipelines as code
 implement → review → fix → re-review → changelog close-out → merge-base
-refresh, run as a script/workflow that returns a readiness report: tier, what
-changed, what verified it, risks.
+refresh, returning a readiness report: tier, what changed, what verified it,
+risks.
+
+**Delivered scope (revised from the original design note):** built as the
+`plugins/forge/skills/pipeline/SKILL.md` skill — a process the coordinator
+follows step by step, dispatching `dispatch`/`review`/bug-fixer at each
+stage and producing the readiness report themselves, not a script that runs
+any of this unattended. This plugin has no mechanism for a plain script to
+spawn a Claude agent inside an interactive session (only the coordinator
+can), so a genuinely headless variant would need `reviewer-clean-check.js`'s
+`claude -p` pattern applied to every stage, not just review — materially
+higher-risk (no human attendance on implement/fix) and explicitly deferred
+to its own future, separately-numbered unit, not part of D22 as delivered.
 
 ### D23 — Measure before adding
 Telemetry (D10) plus tokens-per-unit and review-findings-per-unit; skill
@@ -236,7 +491,7 @@ evals; prune what shows no measured effect.
 Option 1 from `phase0-results.md` is chosen. Cloud environments run, before each
 session:
 
-    claude plugin marketplace add kewi-development/claude-forge
+    claude plugin marketplace add kivers08/claude-forge
     claude plugin install forge@claude-forge
 
 This is environment-side configuration, not repo content: no vendoring, no
@@ -265,7 +520,7 @@ hook behaviour already proven by Phase 0 checks 4, 5 and 11 in row C0. U2 builds
 now. Rows A–D still gate U3+ and still decide D4 (native memory off by default
 in cloud) and D24.
 
-### D26 — U4 proceeds; rows A/B still outstanding (owner override, partial)
+### D26 — U4 proceeds; rows A/B still outstanding (owner override, now fully confirmed for row D)
 2026-09-12: owner ran an additional cloud-environment verification beyond row
 C's Android session and gave an explicit "continue building" for U4, with row
 **D** (VPS via Remote Control) explicitly deferred to a later install/test
@@ -275,3 +530,56 @@ chose to proceed to U4 anyway; this is a partial, explicit override of D25's
 gate, not a claim that A/B are satisfied. `phase0-results.md`'s matrix should
 be corrected with the actual row this new cloud session corresponds to (or a
 new row added) once that's confirmed.
+
+**Row D complete except a literal restart, same day:** an already-open session
+on the owner's dev VPS (Remote Control from the Android app) checked in.
+`CLAUDE_CODE_REMOTE` was unset there, so `.claude/hooks/session-start.sh`'s
+auto-install never fires on this machine (that variable is
+Anthropic-cloud-specific, not set by Remote-Control-to-a-persistent-box) —
+check 6 is n/a for row D, consistent with D24's "persistent machines only
+need a one-time manual install" reasoning. Manual `claude plugin install` for
+both plugins worked (check 1 PASS), but neither plugin's hooks/agents/skills
+loaded into that already-running session afterward, confirming D24's original
+mid-session-load concern for this specific path.
+
+Checks 2–5 and 7–11 were then run via independent headless `claude -p`
+subprocesses (the same method C0 used), since the live session can't restart
+itself mid-conversation. All passed. See `phase0-results.md`'s "Row D partial
+run" and "Row D agent-dispatch findings" notes for full detail, including a
+real safety finding surfaced along the way: this VPS has
+`permissions.defaultMode: "auto"` set globally in `~/.claude/settings.json`,
+so a headless smoke-agent dispatch committed and pushed a stray commit to
+`claude/units` entirely on its own initiative (nothing in the agent's
+definition asked for this) — cleaned up with a follow-up commit, but the
+underlying auto-approval setting is unchanged and is an owner decision, not a
+forge issue.
+
+**Row D fully confirmed, same day, by a literal restart:** later the same
+day the owner opened a genuinely new interactive session on this same VPS
+(this is that literal restart the checks above could only proxy). All of
+checks 1–5 and 7–11 were reconfirmed directly — including the owner running
+`/smoke:ping` themselves (check 2 is gated to explicit user invocation, not
+model-triggerable) and getting the marker back exactly, and this session's
+own SessionStart hook firing with a fresh marker as direct restart evidence
+for check 7. `permissions.defaultMode: "auto"` is still set on this VPS,
+unchanged. Row D is now fully confirmed for every check that applies to it
+(6 remains n/a, per the `CLAUDE_CODE_REMOTE` reasoning above). Rows A and B
+remain fully unrun. See `phase0-results.md`'s "Row D live-session
+confirmation" note for full detail.
+
+## Addendum 2026-09-12: pre-existing guard-tokenizer bypass found during D19 review
+
+### D27 — `hasUnquotedSequence` can be bypassed by quoting one word (not yet fixed)
+Discovered by the `forge:reviewer` agent while reviewing the D19 merge-gate
+T0 carve-out (`claude/u6-merge-gate-t0`, PR into `claude/units`). Any guard
+built on `plugins/forge/hooks/lib/segment-split.js`'s `hasUnquotedSequence`
+(e.g. `merge-gate`, `pr-create`) can be bypassed by quoting a single word of
+an otherwise-real command: `gh "pr" merge 7 --squash` runs identically to
+`gh pr merge 7 --squash` in bash, but the tokenizer marks `pr` as quoted, so
+the sequence match fails and the guard never fires — including the merge-gate
+marker requirement. Confirmed empirically (not just reasoned about); pre-dates
+D19 and every unit in this epic. Not introduced or worsened by D19; not fixed
+by it either. Needs its own unit: distinguish "this whole segment is one
+argument to another command" from "one word of a real command happens to be
+quoted" in `segment-split.js`, then re-verify every guard that depends on
+`hasUnquotedSequence`/`subcommandAfter`.

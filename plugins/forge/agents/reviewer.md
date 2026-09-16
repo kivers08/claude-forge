@@ -30,6 +30,9 @@ epic-unit branch instead — never assume). Run
 it whole is still cheap; otherwise work file-by-file with targeted
 `git diff <base>...HEAD -- <file>` calls, and read each changed file in full
 (within read-discipline limits) for context — not just the diff hunk.
+Exception: if the dispatch prompt already provides the diff as a file to
+Read (e.g. the headless CI `reviewer-clean` check, which runs with no Bash
+tool), Read that file instead of trying to run `git diff` yourself.
 
 ## Read discipline
 

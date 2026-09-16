@@ -21,17 +21,17 @@ Claude Code in C0: 2.1.268, Node v22.22.2, Linux, running as root,
 
 | # | Check | C0 (this container) | A | B | C | D |
 |---|-------|---------------------|---|---|---|---|
-| 1 | Installs from the private marketplace | PASS. Both a local `directory` source and the `github` source (private repo cloned through git credentials, `ref` pinned to this branch) installed `smoke` with `claude plugin install` | | | | |
-| 2 | `/smoke:ping` listed | PASS. `claude -p "/smoke:ping"` returned `SMOKE-SKILL-MARKER-9c1e` and reported the agent as `smoke:smoke-agent` | | | | |
-| 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | |
-| 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | |
-| 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | |
-| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL bare (no hook); PASS once `.claude/hooks/session-start.sh` (option 4) is present — confirmed in a fresh session 2026-09-12, see below | n/a |
-| 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | |
-| 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | |
-| 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | |
-| 10 | Native agent memory | PASS with a caveat: auto memory was OFF by default in this container; see below | | | | |
-| 11 | `${CLAUDE_PLUGIN_DATA}` writable, stable, path | PASS. `/root/.claude/plugins/data/smoke-claude-forge`, identical across restarts, arg and env agree | | | | |
+| 1 | Installs from the private marketplace | PASS. Both a local `directory` source and the `github` source (private repo cloned through git credentials, `ref` pinned to this branch) installed `smoke` with `claude plugin install` | | | | PASS (manual). See "Row D partial run" below |
+| 2 | `/smoke:ping` listed | PASS. `claude -p "/smoke:ping"` returned `SMOKE-SKILL-MARKER-9c1e` and reported the agent as `smoke:smoke-agent` | | | | PASS, confirmed live in the actual restarted interactive session (not just headless) on 2026-09-12: the owner ran `/smoke:ping` and got `SMOKE-SKILL-MARKER-9c1e` back exactly. Caveat: `/smoke:ping` does not appear in the model's own skill listing (expected for a `disable-model-invocation` skill — the harness resolves the literal slash command without the model needing to see it), while `smoke:smoke-agent` does appear in the model's agent listing. See "Row D live-session confirmation" below |
+| 3 | Agent dispatchable, marker verbatim | PASS. `FORGE-MARKER-7f3a` returned in the SMOKE REPORT | | | | PASS, confirmed live (not just headless proxy). `FORGE-MARKER-7f3a` returned verbatim in the SMOKE REPORT |
+| 4 | Exec-form Node PreToolUse hook fires | PASS. `smoke.log` grew by one line per Bash call, including Bash calls made inside the subagent | | | | PASS, confirmed live. `smoke.log` grew per Bash call, with entries tagged to the live session's own `session_id`, including the subagent's `node --version` |
+| 5 | PostToolUse-on-Bash `additionalContext` visible next turn | PASS. Main model quoted `SMOKE-CONTEXT-4b2d...` verbatim; the subagent reported seeing it too | | | | PASS, confirmed live: the main session quoted `SMOKE-CONTEXT-4b2d...` verbatim after every Bash call throughout the session |
+| 6 | Project `enabledPlugins` loads plugin in a fresh cloud session, no manual install | LIKELY FAIL. Simulated headlessly: marketplace auto-registered from project settings, plugin did NOT install or load (details below). Row C decides | n/a | n/a | FAIL bare (no hook); PASS once `.claude/hooks/session-start.sh` (option 4) is present — confirmed in a fresh session 2026-09-12, see below | n/a — the SessionStart hook is gated on `CLAUDE_CODE_REMOTE=true`, confirmed still unset in this literal restarted session too; see below |
+| 7 | Survives restart | PASS across 5 separate `claude -p` processes, and the build session itself resumed with the SessionStart context injected and `smoke:smoke-agent` listed (user-scope install) | | | | PASS, confirmed by an actual restart (not a proxy): this is a genuinely fresh interactive session on the same VPS, with its own SessionStart marker (`SMOKE-SESSION-MARKER-2d9f`) and a new `session_id` in the hook logs |
+| 8 | SubagentStop payload captured | PASS. Fields and last message below | | | | PASS, confirmed live. `subagentstop.json` captured `agent_type: smoke:smoke-agent`, `permission_mode: auto`, full `last_assistant_message` for this session's own dispatch |
+| 9 | Subagent rules-file auto-load | PASS. Rule text arrived as a system-reminder block after the Read | | | | PASS, confirmed live. `rule_seen: YES`, rule line quoted back verbatim |
+| 10 | Native agent memory | PASS with a caveat: auto memory was OFF by default in this container; see below | | | | PASS, confirmed live. Memory dir `.claude/agent-memory/smoke-smoke-agent/`, marker `SMOKE-MEMORY-MARKER-a774` written and reported |
+| 11 | `${CLAUDE_PLUGIN_DATA}` writable, stable, path | PASS. `/root/.claude/plugins/data/smoke-claude-forge`, identical across restarts, arg and env agree | | | | PASS, confirmed live. `/home/kivers/.claude/plugins/data/smoke-claude-forge`, identical across sessions |
 
 ## Findings worth carrying into the build
 
@@ -116,7 +116,7 @@ there" model does not hold for fresh cloud containers. Persistent machines
 
 Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
 1. Cloud environment setup script runs
-   `claude plugin marketplace add kewi-development/claude-forge && claude plugin install forge@claude-forge`
+   `claude plugin marketplace add kivers08/claude-forge && claude plugin install forge@claude-forge`
    before each session. Environment-side, not repo-side; no vendoring. Needs
    the environment's git credentials to reach the private repo (the clone
    above worked in this container).
@@ -131,7 +131,7 @@ Options for cloud (**owner chose option 1 on 2026-09-11; recorded as D24**):
    until restart, so this likely covers skills only.
 
 **Chosen: option 1 (D24).** The cloud environment runs
-`claude plugin marketplace add kewi-development/claude-forge && claude plugin
+`claude plugin marketplace add kivers08/claude-forge && claude plugin
 install forge@claude-forge` before each session. Option 3 (vendoring) stays the
 documented fallback if a real cloud row shows option 1 failing. Row C still runs
 — it decides whether check 6 fails as predicted, and whether auto memory is on.
@@ -153,7 +153,7 @@ neither plugin's hooks (session-start, guards, telemetry) ran for this
 session. Check 6 is FAIL on row C, not just "likely."
 
 Fixed for this session by hand:
-`claude plugin marketplace add kewi-development/claude-forge`, then
+`claude plugin marketplace add kivers08/claude-forge`, then
 `claude plugin install forge@claude-forge` and `...smoke@claude-forge`
 (both installed cleanly at user scope from `main`, commit `53116bc`).
 
@@ -201,6 +201,129 @@ backup in case the project hook is ever removed or `CLAUDE_CODE_REMOTE`
 detection changes — its exact commands are in the "Options for cloud" list
 above (option 1) and do not need repeating here.
 
+### Row D partial run, 2026-09-12 (owner's dev VPS, session already open via Remote Control)
+
+This was an already-running interactive session on the owner's persistent dev
+VPS (Remote Control from the Android app), not a fresh one, so it tests a
+different path than row C: manual install into a live session rather than
+the SessionStart hook.
+
+- `CLAUDE_CODE_REMOTE` was unset (empty string) in this session's environment.
+  `.claude/hooks/session-start.sh` exits 0 immediately when that variable is
+  not `"true"`, so the auto-install path never ran here — confirmed by
+  `~/.claude/plugins/installed_plugins.json` being absent and `claude plugin
+  list` reporting no plugins installed at session start, despite the
+  marketplace already being registered from a prior `claude plugin
+  marketplace add`. This means `CLAUDE_CODE_REMOTE=true` is specific to
+  Anthropic-hosted cloud containers, not Remote-Control sessions to an
+  owner-controlled persistent machine — check 6 is **n/a** for row D, not a
+  fail, since D24's "persistent machines only need a one-time manual install"
+  reasoning already covers this case.
+- Ran `claude plugin install smoke@claude-forge` and `claude plugin install
+  forge@claude-forge` by hand mid-session: both installed cleanly at user
+  scope (`~/.claude/plugins/cache/claude-forge/{smoke,forge}/0.0.1`),
+  `installed_plugins.json` recorded both with `gitCommitSha:
+  2c8f38d1fd69526c7ae3798ab2c11aa346cc2c46`. Check 1 is **PASS** for row D.
+- The plugin's slash commands/agents were NOT available in this same
+  still-running session after the install (no `smoke:ping` skill or
+  `smoke:smoke-agent`/forge agents listed) — consistent with D24's original,
+  later-superseded concern that "a plugin installed mid-session probably does
+  not load its hooks or agents until restart." This is now an observed data
+  point for that exact mechanism (manual install into a live session) rather
+  than an untested guess.
+- Checks 2–5 and 7–11 could not be run by restarting the actual live session
+  (an agent cannot restart the process it is running in and continue
+  afterward). Instead, run the same way as C0: independent headless
+  `claude -p` subprocesses against the user-scope install, which is a fair
+  proxy since these checks are about a session picking up an
+  already-installed plugin, not about this specific process's state. All
+  passed — see the row D column above and "Row D agent-dispatch findings"
+  below.
+
+### Row D agent-dispatch findings, 2026-09-12 (headless `claude -p` subprocesses)
+
+- `claude -p "/smoke:ping"` in a fresh process returned the marker and listed
+  `smoke:smoke-agent` (check 2 PASS).
+- Dispatching `smoke-agent` headlessly against the real repo/branch
+  (`claude/units`) produced the full SMOKE REPORT (marker verbatim, rule_seen
+  YES with the line quoted, memory written) — checks 3, 5, 9, 10 PASS — but
+  the subprocess's final reply to the user was NOT the report; it was a
+  one-line summary that it had run `git add`/`git commit`/`git push` and
+  pushed a new commit (`68a95c0`) straight to `claude/units` on GitHub,
+  unprompted. Nothing in `smoke-agent.md` asks for this. Cross-checking
+  `~/.claude/settings.json` showed `"permissions": {"defaultMode": "auto"}`
+  set globally on this VPS — every tool call, including `git push`, is
+  auto-approved with no human gate, on this session and any subagent or
+  headless subprocess it spawns. The model's own initiative to "wrap up" by
+  committing and pushing went uncontested purely because of that setting; it
+  is not something the smoke/forge plugins asked for. **This is an
+  environment-config finding for row D, not a forge bug**, but it is a live
+  safety gap on this machine worth the owner's attention independent of
+  Phase 0. The stray commit was reverted with a follow-up commit removing the
+  test-artifact memory files (matching the disk-cleanup precedent below), and
+  pushed.
+- To finish checks 4, 8, 11 without repeating that risk, the same dispatch was
+  re-run inside a throwaway local clone with `origin` removed
+  (`git clone --no-hardlinks` + `git remote remove origin`), so a repeat
+  auto-commit/push had nothing to reach. It committed locally again (same
+  behavior, confirming the pattern) but could not push, and was discarded
+  with the whole clone afterward. From that run: `smoke.log` grew once per
+  Bash call including the subagent's `node --version` (check 4 PASS);
+  `subagentstop.log`/`.json` captured `agent_type: smoke:smoke-agent` and the
+  full `last_assistant_message`, containing the SMOKE REPORT block, verbatim
+  marker, `rule_seen: YES`, and the memory path (checks 5, 8, 9, 10 PASS);
+  `${CLAUDE_PLUGIN_DATA}` resolved to
+  `/home/kivers/.claude/plugins/data/smoke-claude-forge` in both the real
+  repo and the throwaway clone (different `cwd`), confirming it is
+  user-scope and path-stable, not repo-scope (check 11 PASS). The
+  `SubagentStop` payload's own `permission_mode` field read `"auto"`,
+  consistent with the settings file above.
+- Check 7 (survives restart) could not be tested by an actual restart of the
+  live session for the reason above. Multiple independent `claude -p`
+  processes across two different working directories all saw the same
+  user-scope plugin install consistently, which is the same style of
+  evidence C0 used ("PASS across 5 separate `claude -p` processes"); treated
+  as a PASS proxy for a persistent machine, not a literal restart test.
+
+### Row D live-session confirmation, 2026-09-12 (genuine restart, owner-driven)
+
+The owner opened a new interactive session on the same dev VPS (Remote
+Control from the Android app), superseding the headless-proxy evidence above
+with a literal restart of the live-session path. `CLAUDE_CODE_REMOTE` was
+confirmed still unset (`hostname` `dev`, user `kivers`), consistent with
+check 6 remaining n/a for row D.
+
+- This session's own SessionStart hook fired with a fresh marker
+  (`SMOKE-SESSION-MARKER-2d9f`) and a new `session_id`, which is itself the
+  restart evidence check 7 needed — not a proxy.
+- Dispatching `smoke:smoke-agent` produced the full SMOKE REPORT
+  (`FORGE-MARKER-7f3a` verbatim, `rule_seen: YES` with the line quoted,
+  memory marker `SMOKE-MEMORY-MARKER-a774` written) with no unprompted
+  commit/push this time (checks 3, 9, 10 PASS).
+- `smoke.log` gained new entries tagged to this session's `session_id` for
+  the subagent's Bash calls (check 4 PASS); `subagentstop.json` captured
+  this dispatch's `agent_type`, `permission_mode: auto`, and full
+  `last_assistant_message` (check 8 PASS); `${CLAUDE_PLUGIN_DATA}` resolved
+  to the same stable path as every prior run (check 11 PASS).
+- Check 5 confirmed directly in the main session: every Bash call in this
+  conversation surfaced `SMOKE-CONTEXT-4b2d...` verbatim on the next turn.
+- The owner ran `/smoke:ping` themselves (it is gated to explicit user
+  invocation and cannot be triggered by the model via the Skill tool) and
+  got `SMOKE-SKILL-MARKER-9c1e` back exactly, confirming check 2 works
+  end-to-end. One nuance worth carrying into the build: `/smoke:ping` does
+  not appear in the model's own skill listing in this session (only
+  `smoke:smoke-agent` appears, under the agent listing) — expected, since a
+  `disable-model-invocation` skill is resolved by the harness from the
+  literal typed command rather than surfaced to the model to invoke, but
+  worth confirming this matches intent rather than being an omission.
+- `permissions.defaultMode: "auto"` is still set globally on this VPS (seen
+  again in this dispatch's own `subagentstop.json` `permission_mode` field),
+  consistent with the safety finding above; unchanged, still pending owner
+  review.
+
+Row D is now fully confirmed by a literal restart for every check that
+applies to it (1-5, 7-11; 6 remains n/a). Rows A and B remain fully unrun.
+
 ### 12. `user-level-write` guard false-positives on plain reads
 
 Observed in the same verification session: a `cat` of a file under
@@ -239,7 +362,7 @@ Per row, after `git pull` on this branch (or after merge):
 
 1. Open a session in the repo. Note whether `/smoke:ping` is listed without any
    manual install (check 6 for C; check 1 for the rest). If not, run
-   `claude plugin marketplace add kewi-development/claude-forge` then
+   `claude plugin marketplace add kivers08/claude-forge` then
    `claude plugin install smoke@claude-forge` and note that you had to.
 2. Run `/smoke:ping` (2).
 3. Run any Bash command, then ask: "quote any additional context that came with
