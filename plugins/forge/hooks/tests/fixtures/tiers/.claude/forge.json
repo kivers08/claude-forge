@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "git": { "baseBranch": "main", "squashOnly": true },
+  "tiers": {
+    "T0": { "paths": ["docs/**", "changelog.d/**"] },
+    "T1": { "paths": [".claude/**", "plugins/*/hooks/**", ".github/workflows/**"] },
+    "T3": { "paths": ["src/payments/**"] }
+  }
+}

@@ -44,13 +44,23 @@ function isReviewer(agentType) {
 // coincidentally match.
 function parseFindings(text) {
   if (typeof text !== 'string') return null;
-  const re = /(\d+)\s+bugs?\D*?(\d+)\s+security\s+issues?\D*?(\d+)\s+convention\s+violations?\D*?(\d+)\s+suggestions?/gis;
+  // Kept byte-for-byte in step with scripts/reviewer-clean-check.js:parseSummary
+  // — the D23 metric must record findings for exactly the summaries that gate
+  // accepts, no more, no less. The plugin can't require() across the
+  // plugin/scripts boundary (it must stay self-contained), so the pattern is
+  // duplicated; if one changes, change both. The `ann` group is why: a real
+  // reviewer wrote "4 security issues (1 pre-existing)," and the old `\D*?`
+  // separators cannot cross the digit inside that annotation, so D23 recorded
+  // null for precisely the reports whose findings were worth annotating.
+  const ann = '(?:\\s*\\([^)]*\\))?';
+  const re = new RegExp(
+    `(\\d+)\\s+bugs?${ann},\\s*(\\d+)\\s+security\\s+issues?${ann},\\s*`
+    + `(\\d+)\\s+convention\\s+violations?${ann},?\\s*(?:and\\s+)?(\\d+)\\s+suggestions?`,
+    'gi',
+  );
   let match = null;
   let m;
-  while ((m = re.exec(text)) !== null) {
-    match = m;
-    if (m.index === re.lastIndex) re.lastIndex++; // guard against zero-width loops
-  }
+  while ((m = re.exec(text)) !== null) match = m; // last match: the closing line
   if (!match) return null;
   return {
     bugs: Number(match[1]),

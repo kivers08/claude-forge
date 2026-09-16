@@ -120,10 +120,12 @@ implementer, bug-fixer, test-writer, reviewer, doc-updater, explorer. Each:
 - **Tier resolution**: `git diff --name-only <base>...HEAD` matched against
   `tiers.<T>.paths`; highest tier wins; no match means T2. Dispatch reads the
   tier to pick budget, review model, and the gate chain (D18).
-- **Merge policy** (D19): T0 uses GitHub auto-merge with required checks and
-  an owner notification; the merge-gate hook allows it only when the resolved
-  tier is T0. T1–T3 need the human "merge" marker. The CLAUDE.md framework
-  block states the T0 exception.
+- **Merge policy** (D19, revised 2026-09-13): T0 PRs *can* get GitHub
+  auto-merge with required checks, enabled by a CI job (`scripts/
+  t0-auto-merge.js`, a reference implementation — the plugin ships no such
+  job). The merge-gate hook itself has **no tier exception**: every merge
+  the agent runs into the base branch needs the human "merge" marker, T0
+  included. The CLAUDE.md framework block states this separation.
 - **Status checks** (D20, U3/U5): CI posts a `forge validators` check run
   (schema, index contract, fragments, framework-block drift) and a
   `reviewer clean` commit status when the reviewer agent returns no blocking

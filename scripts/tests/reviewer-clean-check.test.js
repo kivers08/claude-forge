@@ -11,6 +11,7 @@ const {
   parseSummary,
   verifyDiffResolvedAck,
   matchesInstructionSurface,
+  capText,
 } = require('../reviewer-clean-check.js');
 
 const BASE = '3e5422e9955e3af53f55d889e4f3932f454bde16';
@@ -97,6 +98,24 @@ test('keeps the LAST match when the body restates the shape', () => {
     'Final: 0 bugs, 0 security issues, 0 convention violations, 3 suggestions.',
   ].join('\n');
   assert.deepStrictEqual(parseSummary(text), { bugs: 0, security: 0, convention: 0, suggestions: 3 });
+});
+
+test('tolerates a parenthetical annotation on a count (the real CI failure)', () => {
+  // Verbatim from a real reviewer run; the strict form failed the whole
+  // required check with "could not find the reviewer's required summary line".
+  const s = parseSummary('2 bugs, 4 security issues (1 pre-existing and already tracked), 1 convention violation, 2 suggestions.');
+  assert.deepStrictEqual(s, { bugs: 2, security: 4, convention: 1, suggestions: 2 });
+});
+
+test('tolerates an annotation containing a comma, and a trailing "and"', () => {
+  assert.deepStrictEqual(
+    parseSummary('1 bug, 2 security issues (1 pre-existing, tracked), 0 convention violations, 3 suggestions.'),
+    { bugs: 1, security: 2, convention: 0, suggestions: 3 },
+  );
+  assert.deepStrictEqual(
+    parseSummary('1 bug, 0 security issues, 0 convention violations, and 2 suggestions.'),
+    { bugs: 1, security: 0, convention: 0, suggestions: 2 },
+  );
 });
 
 test('returns null when no summary line is present', () => {
@@ -207,6 +226,30 @@ test('accepts a markdown-emphasised ack line', () => {
 
 test('accepts a three-dot range', () => {
   assert.strictEqual(ack(`diff-resolved: ${BASE}...${HEAD} token=${TOKEN}`).ok, true);
+});
+
+console.log('capText (truncation gate — body blocks, file list only annotates in main()):');
+
+test('returns the text unchanged and truncated:false at or under the cap', () => {
+  const r = capText('abcde', 5, 'body');
+  assert.strictEqual(r.truncated, false);
+  assert.strictEqual(r.text, 'abcde');
+});
+
+test('truncated:true and an inline note once over the cap', () => {
+  const r = capText('abcdef', 5, 'body');
+  assert.strictEqual(r.truncated, true);
+  assert.ok(r.text.startsWith('abcde'), 'keeps the first `max` chars');
+  assert.ok(/\[TRUNCATED body — 5 of 6 chars shown\]/.test(r.text), 'names kind and both sizes');
+});
+
+test('one char over the cap already truncates (boundary)', () => {
+  assert.strictEqual(capText('x'.repeat(6), 5, 'file list').truncated, true);
+  assert.strictEqual(capText('x'.repeat(5), 5, 'file list').truncated, false);
+});
+
+test('the kind label distinguishes body from file list', () => {
+  assert.ok(capText('abcdef', 5, 'file list').text.includes('TRUNCATED file list —'));
 });
 
 if (failures > 0) {
