@@ -149,12 +149,47 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
+      # The decision CODE must come from the base ref, not the PR's checkout —
+      # otherwise a PR can edit scripts/reviewer-clean-check.js to delete its
+      # own ack/token/truncation/instruction-surface gates and self-certify.
+      # Same reasoning and same shape as the t0-auto-merge job above; that job
+      # explains the RUNNER_TEMP-not-the-checkout and tolerated-failure choices
+      # in full. reviewer-clean-check.js requires only Node stdlib, so `scripts`
+      # alone is enough (no plugins/forge/hooks/lib, unlike the t0 job).
+      - name: extract decision tooling from the base ref
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          rm -rf "$RUNNER_TEMP/base-tools"
+          mkdir -p "$RUNNER_TEMP/base-tools"
+          git archive "origin/$GITHUB_BASE_REF" scripts \
+            | tar -x -C "$RUNNER_TEMP/base-tools" || echo "base ref has no scripts/ yet"
       - name: reviewer clean (dispatch forge:reviewer, post commit status)
         env:
           CORP_RUNNER: ${{ vars.CORP_RUNNER }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/reviewer-clean-check.js
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          # Point the base-ref copy (which lives outside the workspace) at the
+          # real checkout for its git calls, the diff file, and --add-dir.
+          FORGE_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          set -uo pipefail
+          BASE="$RUNNER_TEMP/base-tools/scripts/reviewer-clean-check.js"
+          # Run the base-ref copy so a PR can't rewrite the gate. Fall back to
+          # the PR's own copy ONLY on the bootstrap PR that introduces base-ref
+          # execution — detected by the FORGE_REPO_ROOT marker, since a base
+          # copy predating this support ignores the override, resolves ROOT to
+          # its own out-of-tree location, and fails every git call. Once this
+          # PR merges, the base always has the marker and this branch is dead.
+          if [ -f "$BASE" ] && grep -q FORGE_REPO_ROOT "$BASE"; then
+            node "$BASE"
+          else
+            echo "reviewer clean: base ref predates FORGE_REPO_ROOT-aware check;"
+            echo "reviewer clean: running the PR's own copy (bootstrap only)."
+            node scripts/reviewer-clean-check.js
+          fi
 
   t0-auto-merge:
     # D19 T0 exception: when a PR's changed paths resolve (D17, via

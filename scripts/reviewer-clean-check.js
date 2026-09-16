@@ -26,7 +26,16 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { spawnSync } = require('child_process');
 
-const ROOT = path.resolve(__dirname, '..');
+// Normally the repo root two levels up from this file. FORGE_REPO_ROOT lets
+// the workflow run a base-ref COPY of this script (extracted outside the
+// checkout — see ci.yml's reviewer-clean job) while still pointing every git
+// call, the diff file, and --add-dir at the real PR checkout. Mirrors
+// t0-auto-merge.js: the decision code must come from a ref the PR author
+// cannot write, or a PR could delete this file's own ack/token/truncation/
+// instruction-surface gates and self-certify.
+const ROOT = process.env.FORGE_REPO_ROOT
+  ? path.resolve(process.env.FORGE_REPO_ROOT)
+  : path.resolve(__dirname, '..');
 const CONTEXT = 'reviewer clean';
 const DIFF_FILE = path.join(ROOT, '.reviewer-clean-diff.txt');
 // Cap so the reviewer isn't handed an unusable wall of text. (It is NOT a
@@ -332,14 +341,27 @@ function changedInstructionSurfaces(base) {
   return changed.filter((p) => matchesInstructionSurface(p, lessons.path));
 }
 
+// Pure: caps `text` at `max` chars, appending an inline truncation note when
+// it does. Exported for tests — the body/stat asymmetry that hangs off the
+// `truncated` boolean is load-bearing (see the gate in main()), and this is
+// the piece that decides it. `kind` only labels the note.
+function capText(text, max, kind) {
+  if (text.length <= max) return { text, truncated: false };
+  return {
+    text: `${text.slice(0, max)}\n[TRUNCATED ${kind} — ${max} of ${text.length} chars shown]\n`,
+    truncated: true,
+  };
+}
+
 // Computes the PR diff on the trusted parent process (this script already
 // has full git access and a fetch-depth: 0 checkout) and writes it to
 // DIFF_FILE, inside ROOT so --add-dir ROOT already covers it for the
 // reviewer child's Read tool. Also writes a random verification token into
 // the file — see verifyDiffResolvedAck for why the prompt must never state
-// this value. Returns { token, truncated } — the token so main() can verify
-// it against the reviewer's ack line, and `truncated` so a verdict derived
-// from a partial diff can never be posted as an unqualified clean review.
+// this value. Returns { token, bodyTruncated, statTruncated }: the token so
+// main() can verify it against the reviewer's ack line, and the two flags so a
+// verdict derived from a partial diff can never be posted as an unqualified
+// clean review. The two are kept separate — see the return note below.
 function computeAndWriteDiff(base, baseSha, headSha) {
   const range = `origin/${base}...HEAD`;
   const opts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
@@ -348,26 +370,11 @@ function computeAndWriteDiff(base, baseSha, headSha) {
   if (stat.error || stat.status !== 0 || body.error || body.status !== 0) {
     throw new Error(`git diff ${range} failed: ${(stat.stderr || body.stderr || '').trim()}`);
   }
-  let diffBody = body.stdout;
-  let truncationNote = '';
-  let bodyTruncated = false;
-  let statTruncated = false;
-  if (diffBody.length > DIFF_MAX_CHARS) {
-    const full = diffBody.length;
-    diffBody = diffBody.slice(0, DIFF_MAX_CHARS);
-    truncationNote = `\n\n[TRUNCATED — ${DIFF_MAX_CHARS} of ${full} chars shown]\n`;
-    bodyTruncated = true;
-  }
-  // The --stat block is capped too, and its truncation counts toward the same
-  // flag: a PR touching thousands of files produces a stat wall of its own,
-  // and a file list the reviewer never saw the end of is exactly as partial a
-  // review as a body it never saw the end of.
-  let statBlock = stat.stdout;
-  if (statBlock.length > STAT_MAX_CHARS) {
-    const full = statBlock.length;
-    statBlock = `${statBlock.slice(0, STAT_MAX_CHARS)}\n[TRUNCATED — ${STAT_MAX_CHARS} of ${full} chars shown]\n`;
-    statTruncated = true;
-  }
+  const { text: diffBody, truncated: bodyTruncated } = capText(body.stdout, DIFF_MAX_CHARS, 'body');
+  // The --stat block is capped too. A PR touching thousands of files produces
+  // a stat wall of its own, but losing its tail is not as bad as losing the
+  // body's — see the return note below — so it carries its own flag.
+  const { text: statBlock, truncated: statTruncated } = capText(stat.stdout, STAT_MAX_CHARS, 'file list');
   const token = crypto.randomBytes(8).toString('hex');
   const content = [
     `base: ${base} (${baseSha})`,
@@ -377,7 +384,7 @@ function computeAndWriteDiff(base, baseSha, headSha) {
     '--- git diff --stat ---',
     statBlock,
     '--- git diff (full body) ---',
-    diffBody + truncationNote,
+    diffBody,
   ].join('\n');
   fs.writeFileSync(DIFF_FILE, content, 'utf8');
   // Returned separately, not as one collapsed label, because they mean
@@ -739,5 +746,5 @@ if (require.main === module) {
 } else {
   // verifyDiffResolvedAck is exported alongside parseSummary as a test seam:
   // both are pure, and the ack gate is what decides whether a review counts.
-  module.exports = { parseSummary, verifyDiffResolvedAck, matchesInstructionSurface };
+  module.exports = { parseSummary, verifyDiffResolvedAck, matchesInstructionSurface, computeAndWriteDiff, capText };
 }

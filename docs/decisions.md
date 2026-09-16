@@ -310,6 +310,26 @@ Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
   the PR touches the reviewer's own instruction surface. Those are the half
   of this check that can be an enforcing boundary, and they are the half that
   is required under D26. Everything below still applies to the verdict half.
+- **The mechanics only enforce if their CODE is not PR-controlled.** (Added
+  2026-09-15, U13, from an advisory finding on PR #9.) The faults above are
+  only a boundary if a PR cannot delete the code that raises them. The
+  `reviewer-clean` job checks out the PR, so running
+  `scripts/reviewer-clean-check.js` from that checkout let a PR strip its own
+  ack/token/truncation/instruction-surface gates and post `success`. Closed
+  the same way the T0 job (D19) closes it for its merge decision: the job now
+  extracts `scripts` from `origin/<base>` into `$RUNNER_TEMP` and runs that
+  copy, with `FORGE_REPO_ROOT` pointing it at the PR checkout for git/diff/
+  `--add-dir` (the script gained the same override `t0-auto-merge.js` has). A
+  one-commit bootstrap fallback runs the PR's own copy only while the base
+  ref predates the `FORGE_REPO_ROOT` marker. **Residual, not closed here:** the
+  *workflow file itself* still comes from the PR's merge ref, so a PR can
+  append a step to the job and post the status directly, or `.github/workflows`
+  is not in the instruction-surface list (adding it would fail every
+  legitimate CI change, and it is a weak half-measure regardless). The only
+  real closure is a `pull_request_target` workflow plus branch protection on
+  `.github/workflows/` — the same D19 follow-up the T0 job is already waiting
+  on. Until then, this check (like the T0 job) is hardened against a PR
+  *rewriting the logic*, not against one *appending to the job*.
 - **Advisory, not a security boundary.** `reviewer clean`'s verdict is
   model-authored text derived from untrusted PR diff content, then parsed
   for pass/fail — so the diff itself is prompt-injection surface against
