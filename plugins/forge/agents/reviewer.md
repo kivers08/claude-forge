@@ -3,6 +3,7 @@ name: reviewer
 description: Reviews a diff (current branch vs. its base) for correctness bugs, security issues, and convention violations, then returns findings to the main context. Never edits files and never posts to GitHub itself — the coordinator decides what to do with the findings.
 tools: Read, Glob, Grep, Bash
 memory: project
+model: opus
 ---
 
 # reviewer

@@ -3,6 +3,7 @@ name: bug-fixer
 description: Reproduces and fixes one reported bug on an existing branch — finds the root cause, applies the minimal fix, adds or extends a regression test, and reports back. Not for open-ended refactors or feature work.
 tools: Read, Edit, Glob, Grep, Bash
 memory: project
+model: sonnet
 ---
 
 # bug-fixer
