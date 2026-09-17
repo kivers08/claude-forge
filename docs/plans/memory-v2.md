@@ -83,6 +83,40 @@ unverified CLI-behavior questions in §6.
 
 ---
 
+## D28.2 — Adoption migration: adapt a consumer repo's existing memory (SETTLED 2026-09-16)
+
+Owner-confirmed, via `forge:brainstorm`. Distinct from D28.1 (which settled the
+storage engine); this settles what happens on *adoption*.
+
+**Decision:** when forge is installed/activated into a repository that ALREADY
+has agent memory or lessons (in any prior shape), forge **adapts those existing
+files into the memory-v2 record format** — restructures them into the schema at
+the correct per-agent locations — **non-destructively: content is preserved,
+files are never deleted, and existing records are updated/merged in place, never
+overwritten or dropped.** This is the plugin's own capability applied to the
+*consumer* repo's memory. It is explicitly NOT about shipping this dev-repo's
+lessons to consumers — there is no dev-lesson "seed."
+
+**Trigger (chosen — option i):** adaptation runs **at adoption, explicitly** —
+via the `bootstrap` skill and a `forge memory migrate` command the human runs
+once when adding forge — NOT silently on first SessionStart. Rationale:
+rewriting a repo's files is a deliberate, visible act; a silent auto-rewrite on
+first session would violate forge's "no invisible standing policy" posture (§2.2)
+and could surprise an adopter. Detection may *notice* unadapted memory and
+prompt, but the rewrite itself is human-initiated.
+
+**Non-destructive guarantee (the "Bluegrass rule"):** additive where possible
+(add frontmatter in place), archive-not-delete otherwise (`_archive/`, §3.2),
+**idempotent** (re-run is a no-op), and it must **never remove a pre-existing
+record or its content**. A fixture simulating a consumer repo with pre-existing
+memory (including a non-memory-v2 shape) guards this.
+
+**Effect on the unit plan:** unit 1's `migrate-agent-memory.js` is the seed of
+this (in-place additive migration of this repo's own files). A dedicated
+adoption-migration unit (§7 unit 8) generalizes it.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
@@ -271,9 +305,17 @@ Cite the docs or test on a scratch project — do not guess.
 6. **Earned-memory measurement** (T2) — Wilson intervals, measurement-only.
 7. **Optional dense reranker** (T2) — separately-installed embedder, RRF fuse;
    stdlib fallback stays the default. *(lands last)*
+8. **Adoption migration** (T1, D28.2) — generalize unit 1's
+   `migrate-agent-memory.js` into forge's install-time capability: adapt a
+   *consumer* repo's existing agent memory/lessons (any prior shape) into
+   memory-v2 format, **non-destructively** (additive / archive-not-delete,
+   idempotent, never removes content). Wire into the `bootstrap` skill + a
+   `forge memory migrate` command. Fixture: a repo with pre-existing memory in a
+   non-memory-v2 shape. Depends on unit 1.
 
 Order lands the stdlib lexical core before anything optional; the security unit
-(4) is independent and can go early.
+(4) is independent and can go early; the adoption migration (8) builds directly
+on unit 1.
 
 ---
 
@@ -287,6 +329,11 @@ Order lands the stdlib lexical core before anything optional; the security unit
   optionally turns a LEARNING block into a `source: learning-block` record at
   SubagentStop. SubagentStop auto-filing stays **experiment-gated** (D15) until
   measurement (unit 6) shows it earns its place.
+- **Adoption into another repo (D28.2):** when forge is installed into a repo
+  that already has agent memory, the same additive / archive-not-delete
+  migration (unit 8) adapts those files into memory-v2 format — run explicitly
+  at adoption (`bootstrap` / `forge memory migrate`), never silently, never
+  destructively, idempotent on re-run.
 
 ---
 
