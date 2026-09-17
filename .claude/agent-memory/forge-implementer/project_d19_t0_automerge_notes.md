@@ -1,14 +1,4 @@
 ---
-id: 94c6282d-87fc-40fd-a583-d6a765197dbd
-type: note
-scope: implementer
-tier: semantic
-importance: 0.5
-created: "2026-09-17T01:17:45.812Z"
-lastUsed: null
-uses: 0
-source: authored
-supersedes: null
 name: project-d19-t0-automerge-notes
 description: Findings from implementing D17/D19 (tier resolver + merge-gate T0 auto-merge exception, unit u6) that aren't obvious from re-reading the code alone.
 metadata:

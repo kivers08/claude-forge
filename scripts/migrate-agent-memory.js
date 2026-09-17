@@ -1,12 +1,28 @@
 #!/usr/bin/env node
 'use strict';
-// memory-v2 migration (docs/plans/memory-v2.md §8, unit 1).
+// memory-v2 migration (docs/plans/memory-v2.md §8, unit 1) — SAFE SEED ONLY.
 //
 // A MECHANICAL pass that adds the memory-v2 frontmatter schema (§3.2) to the
 // EXISTING .claude/agent-memory/**/*.md records WITHOUT losing their content or
 // their pre-existing frontmatter. This is a script (NOT a hook), so it is
 // allowed to use Date/crypto for timestamps and ids — the no-Date.now rule in
 // memory.js is about hooks specifically.
+//
+// NOT RUN as part of unit 1 (D28.2): adoption migration is EXPLICIT — a human
+// runs it deliberately at adoption, never silently on SessionStart. Unit 1 does
+// NOT auto-migrate this repo; this script is the safe seed the full
+// archive-model adoption migration (unit 8) generalizes.
+//
+// TODO(unit 8, D28.2): archive-model + explicit adoption. This in-place-additive
+// seed must be generalized to: move the PRISTINE original to
+// `.claude/agent-memory/_pre-migration/<scope>/` (never delete), be idempotent,
+// and run only via the `bootstrap` skill / `forge memory migrate` command a
+// human invokes — not automatically.
+//
+// Every write here runs through the same scrubSecrets path memory.js uses on
+// every write (plan §3.4: "Every write runs the redaction scrubber first"), so
+// a secret sitting in an already-committed file cannot survive migration
+// unredacted.
 //
 // Design decisions (documented here because the diff alone won't explain them):
 //
@@ -81,7 +97,7 @@ function scopeFromDir(dirName) {
   return { plugin: dirName.slice(0, idx), scope: dirName.slice(idx + 1) };
 }
 
-function migrateFile(full, plugin, scope) {
+function migrateFile(full, plugin, scope, dry = DRY) {
   const raw = fs.readFileSync(full, 'utf8');
   const parsed = mem.parseRecord(raw);
   // Already migrated? (has a memory-v2 id) -> idempotent no-op.
@@ -102,11 +118,21 @@ function migrateFile(full, plugin, scope) {
     source: 'authored', // these were written by a human/agent explicitly
     supersedes: null,
   };
-  // Preserve the pre-existing frontmatter (name/description/metadata) verbatim
-  // as `extra`, and keep the body exactly.
-  const out = mem.serializeRecord({ frontmatter: fm, extra: parsed.extra, body: parsed.body });
-  if (!DRY) fs.writeFileSync(full, out);
-  return { full, action: DRY ? 'would-migrate' : 'migrate', type: fm.type };
+  // Scrub before write, same as memory.js's writeRecord (plan §3.4): the body,
+  // each string frontmatter value, and every string nested in the preserved
+  // `extra` (name/description/metadata). A secret in an already-committed file
+  // must not survive migration unredacted.
+  const redactions = [];
+  const scrubbedBody = mem.scrubValueDeep(parsed.body, redactions);
+  for (const k of Object.keys(fm)) {
+    if (typeof fm[k] === 'string') fm[k] = mem.scrubValueDeep(fm[k], redactions);
+  }
+  const scrubbedExtra = mem.scrubValueDeep(parsed.extra, redactions);
+  // Preserve the pre-existing frontmatter (name/description/metadata) as `extra`,
+  // and keep the (scrubbed) body.
+  const out = mem.serializeRecord({ frontmatter: fm, extra: scrubbedExtra, body: scrubbedBody });
+  if (!dry) fs.writeFileSync(full, out);
+  return { full, action: dry ? 'would-migrate' : 'migrate', type: fm.type, redactions: redactions.length };
 }
 
 function main() {
@@ -140,10 +166,21 @@ function main() {
   for (const r of results) {
     if (r.action === 'error') { errored++; console.error(`ERROR ${r.full}: ${r.reason}`); }
     else if (r.action === 'skip') { skipped++; console.log(`skip  ${path.relative(REPO, r.full)} (${r.reason})`); }
-    else { migrated++; console.log(`${r.action}  ${path.relative(REPO, r.full)} -> type:${r.type}`); }
+    else {
+      migrated++;
+      const red = r.redactions ? ` (redacted ${r.redactions})` : '';
+      console.log(`${r.action}  ${path.relative(REPO, r.full)} -> type:${r.type}${red}`);
+    }
   }
   console.log(`\n${migrated} migrated, ${skipped} skipped, ${errored} errored${DRY ? ' (dry run)' : ''}`);
   process.exit(errored ? 1 : 0);
 }
 
-main();
+// Run only when invoked directly (node scripts/migrate-agent-memory.js). When
+// require()'d by a test, expose the pure helpers so the migration can be
+// exercised against a TEMP fixture dir — never the repo's real files.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { migrateFile, classifyType, scopeFromDir };

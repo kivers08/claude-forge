@@ -100,8 +100,12 @@ const REDACTION_PATTERNS = [
   // (the LHS + `=`) is preserved so the record still reads sensibly; only the
   // value is scrubbed.
   {
+    // The `(?!\[REDACTED:)` guard stops this (broad) pattern from re-redacting a
+    // value an EARLIER, more-specific pattern already replaced (e.g. a
+    // GITHUB_TOKEN= that became `[REDACTED:github-token]`). Without it the
+    // specific kind label is lost and `redactions` double-counts one secret.
     kind: 'secret-assignment',
-    re: /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)("?)([^\s"']{6,})\2/gi,
+    re: /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)("?)(?!\[REDACTED:)([^\s"']{6,})\2/gi,
     replace: (m, kw) => `${kw}[REDACTED:secret-assignment]`,
   },
 ];
@@ -165,6 +169,10 @@ function needsQuote(v) {
   if (/^-?\d+(\.\d+)?$/.test(v)) return true;
   if (/^[\s]|[\s]$/.test(v)) return true;
   if (/[:#]/.test(v)) return true;
+  // A value beginning with a YAML indicator char (block seq `-`, flow
+  // collections, anchors/aliases, tags, block/quote scalars, directives) is
+  // mis-parsed or invalid when written bare in a file a real YAML reader sees.
+  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(v)) return true;
   return false;
 }
 
@@ -184,15 +192,17 @@ function serializeScalar(v) {
 // frontmatter rather than throwing, so a hook reading a poisoned/corrupt file
 // never crashes the session (D11 fail-open posture, matches lib/io.js).
 //
-// Returns { frontmatter, extra, body, order, malformed }
+// Returns { frontmatter, extra, body, malformed }
 //   frontmatter — the memory-v2 schema fields present (typed)
 //   extra       — any other key:value lines preserved verbatim (migration)
 //   body        — everything after the closing fence
-//   order       — the key order as encountered (so re-serialize is stable)
 //   malformed   — true if there was no valid frontmatter block
+// (No `order`: serializeRecord emits FIELD_ORDER then `extra` insertion order,
+// so a caller-visible `order` would imply a stability guarantee the serializer
+// does not honor. Dropped rather than left as dead, misleading output.)
 function parseRecord(raw) {
   const text = String(raw == null ? '' : raw);
-  const empty = { frontmatter: {}, extra: {}, body: text, order: [], malformed: true };
+  const empty = { frontmatter: {}, extra: {}, body: text, malformed: true };
   // Frontmatter must be the very first thing in the file.
   if (!text.startsWith('---')) return empty;
   // Find the opening fence line and the next closing fence.
@@ -206,7 +216,6 @@ function parseRecord(raw) {
 
   const frontmatter = {};
   const extra = {};
-  const order = [];
   let lastKey = null;
   let lastBucket = null;
   for (let i = 1; i < close; i++) {
@@ -214,9 +223,13 @@ function parseRecord(raw) {
     if (line.trim() === '') continue;
     // A nested / indented line (e.g. the `metadata:` block in existing files).
     // We don't model nesting; preserve the whole indented line under the parent
-    // key so migration stays lossless.
-    if (/^\s+\S/.test(line) && lastKey !== null && lastBucket) {
-      lastBucket[lastKey] = (lastBucket[lastKey] === null ? '' : lastBucket[lastKey])
+    // key so migration stays lossless. Restricted to the `extra` bucket ONLY:
+    // a stray indented line under a TYPED schema key (e.g. `supersedes`) must be
+    // skipped, not appended — appending would turn a scalar field into a garbage
+    // string (a truthy `supersedes` triggers a bogus archive; a bad `importance`
+    // is a wrong number), and validateFrontmatter can't catch every such case.
+    if (/^\s+\S/.test(line) && lastKey !== null && lastBucket === extra) {
+      extra[lastKey] = (extra[lastKey] === null ? '' : extra[lastKey])
         + '\n' + line;
       continue;
     }
@@ -232,11 +245,10 @@ function parseRecord(raw) {
       lastBucket = extra;
     }
     lastKey = key;
-    if (!order.includes(key)) order.push(key);
   }
 
   const body = lines.slice(close + 1).join('\n');
-  return { frontmatter, extra, body, order, malformed: false };
+  return { frontmatter, extra, body, malformed: false };
 }
 
 // Serialize a record { frontmatter, extra?, body } back to markdown. The
@@ -266,8 +278,15 @@ function serializeRecord(record) {
   return out.join('\n') + '\n' + body;
 }
 
-// Serialize one field. A value that was preserved as a multiline indented block
-// (migration `extra`, e.g. `metadata:` + its children) is emitted verbatim.
+// Serialize one field. Handles three shapes an `extra` value can take (schema
+// fields are always scalar):
+//   * a multiline STRING preserved verbatim as an indented block (migration's
+//     `metadata:` + children, captured by parseRecord's continuation branch);
+//   * a nested MAP (one level) — emitted as the `key:` header + `  child: val`
+//     lines, exactly the block form parseRecord round-trips back into a string;
+//   * an ARRAY — emitted as `key:` + `  - item` lines (YAML block sequence).
+// Objects/arrays must NEVER fall through to serializeScalar (String(obj) is
+// `[object Object]`, String(arr) drops structure) — that silently loses data.
 function serializeField(key, value) {
   if (typeof value === 'string' && value.includes('\n')) {
     // Multiline preserved block: first physical line is this key's own value,
@@ -275,6 +294,17 @@ function serializeField(key, value) {
     const [head, ...rest] = value.split('\n');
     const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
     return [headOut, ...rest].join('\n');
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return `${key}: []`;
+    const items = value.map((v) => `  - ${serializeScalar(v)}`);
+    return [`${key}:`, ...items].join('\n');
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return `${key}: {}`;
+    const children = keys.map((k) => `  ${k}: ${serializeScalar(value[k])}`);
+    return [`${key}:`, ...children].join('\n');
   }
   return `${key}: ${serializeScalar(value)}`;
 }
@@ -296,14 +326,25 @@ function validateFrontmatter(fm) {
     problems.push(`tier must be one of ${TIERS.join('|')} (got ${JSON.stringify(fm.tier)})`);
   }
   if (fm.importance !== undefined && fm.importance !== null) {
+    // Guard against empty-string / whitespace: Number('') is 0 (not NaN), so a
+    // bare `importance:` line (which parseScalar yields as '') would sneak
+    // through as 0 without this explicit numeric-shape check.
+    const isNumericShape = typeof fm.importance === 'number'
+      || /^-?\d*\.?\d+$/.test(String(fm.importance));
     const n = Number(fm.importance);
-    if (Number.isNaN(n) || n < 0 || n > 1) problems.push('importance must be 0.0–1.0');
+    if (!isNumericShape || Number.isNaN(n) || n < 0 || n > 1) {
+      problems.push('importance must be 0.0–1.0');
+    }
   }
   if (fm.source !== undefined && fm.source !== null && !SOURCES.includes(fm.source)) {
     problems.push(`source must be one of ${SOURCES.join('|')} (got ${JSON.stringify(fm.source)})`);
   }
-  if (fm.uses !== undefined && fm.uses !== null && !Number.isInteger(Number(fm.uses))) {
-    problems.push('uses must be an integer');
+  if (fm.uses !== undefined && fm.uses !== null) {
+    const isIntShape = typeof fm.uses === 'number'
+      || /^-?\d+$/.test(String(fm.uses));
+    if (!isIntShape || !Number.isInteger(Number(fm.uses))) {
+      problems.push('uses must be an integer');
+    }
   }
   return problems;
 }
@@ -329,8 +370,19 @@ function newId(supplied) {
 // (caller supplies it — the library never guesses cwd). `scope` maps to
 // <plugin>-<scope>. Per-agent isolation (D4) is enforced here: this returns a
 // single directory and nothing above it is ever read as records.
+// Strict charset for a plugin/scope segment: lowercase alphanumeric + hyphen,
+// must start with an alphanumeric. This BANS `/`, `.`, `..`, and any other
+// separator, so `${plugin}-${scope}` can never contain a path separator and
+// path.join can never escape `root`. All SCOPES and the `forge` plugin match.
+const SEGMENT_RE = /^[a-z0-9][a-z0-9-]*$/;
+
 function scopeDir(root, plugin, scope) {
-  return path.join(root, `${plugin || 'forge'}-${scope}`);
+  const p = plugin || 'forge';
+  const s = String(scope);
+  if (!SEGMENT_RE.test(p) || !SEGMENT_RE.test(s)) {
+    throw new Error(`memory: invalid plugin/scope segment (must match ${SEGMENT_RE}): ${p}-${s}`);
+  }
+  return path.join(root, `${p}-${s}`);
 }
 
 // Read every record in exactly ONE scope directory. Never descends into or
@@ -341,7 +393,12 @@ function scopeDir(root, plugin, scope) {
 //
 // Returns [{ file, frontmatter, extra, body, malformed }].
 function readScope(root, plugin, scope) {
-  const dir = scopeDir(root, plugin, scope);
+  let dir;
+  try {
+    dir = scopeDir(root, plugin, scope);
+  } catch (e) {
+    return []; // invalid scope segment — fail open on the READ path (D11)
+  }
   let names;
   try {
     names = fs.readdirSync(dir);
@@ -408,9 +465,11 @@ function scrubValueDeep(value, redactions) {
 //   root, plugin, scope   — locate the scope dir (required)
 //   frontmatter           — schema fields; `id` required; `scope` defaulted from `scope` arg
 //   body                  — record body (string)
-//   now                   — ISO8601 timestamp string the CALLER supplies (required for
-//                           created/lastUsed stamping — see the no-Date.now note).
-//                           If absent, created/lastUsed are left to the caller's frontmatter.
+//   now                   — ISO8601 timestamp string the CALLER supplies (used to stamp
+//                           `created` when the frontmatter omits it — see the no-Date.now
+//                           note). `lastUsed` defaults to null (a fresh record has never
+//                           been recalled); unit 3's recall bumps it. If `now` is absent,
+//                           `created` is left to the caller's frontmatter.
 //   supersedesId          — if set (or frontmatter.supersedes set), the named record's
 //                           file is archived (moved to _archive/) before this write.
 //
@@ -429,6 +488,16 @@ function writeRecord(opts) {
   if (now) {
     if (!fm.created) fm.created = now;
   }
+  // Default the full §3.2 schema so a record written via the happy path has
+  // every ranking field on disk (unit 3's recall reads lastUsed/uses/tier/
+  // importance/source — §3.3). `now` stamps lastUsed alongside created when the
+  // caller supplies it; otherwise lastUsed starts null.
+  if (fm.lastUsed === undefined) fm.lastUsed = null;
+  if (fm.uses === undefined) fm.uses = 0;
+  if (fm.supersedes === undefined) fm.supersedes = null;
+  if (!fm.tier) fm.tier = 'semantic';
+  if (fm.importance === undefined) fm.importance = 0.5;
+  if (!fm.source) fm.source = 'authored';
 
   // Scrub EVERY write path before bytes touch disk (§4): the body, each
   // string-valued frontmatter field, and every string nested in `extra`
@@ -464,8 +533,19 @@ function writeRecord(opts) {
     archived = archiveRecord(dir, supersedesId);
   }
 
+  // If anything was scrubbed, stamp the caveat INTO the record (plan §4: the
+  // redaction caveat must be "documented in the record header"). It rides in
+  // `extra` (not a schema field) so it serializes after the typed fields and
+  // survives a round-trip. The caveat is honest: pattern scrubbing is a safety
+  // net, not a guarantee.
+  const extraOut = { ...scrubbedExtra };
+  if (redactions.length > 0) {
+    extraOut.redacted = true;
+    extraOut.redactionCaveat = REDACTION_CAVEAT;
+  }
+
   const file = path.join(dir, recordFileName(fm.id));
-  const out = serializeRecord({ frontmatter: fm, extra: scrubbedExtra, body: scrubbedBody.text });
+  const out = serializeRecord({ frontmatter: fm, extra: extraOut, body: scrubbedBody.text });
   fs.writeFileSync(file, out);
   return { file, redactions, archived };
 }
@@ -503,7 +583,7 @@ function archiveRecord(dir, id) {
 module.exports = {
   TYPES, SCOPES, TIERS, SOURCES, FIELD_ORDER,
   REDACTION_PATTERNS, REDACTION_CAVEAT,
-  scrubSecrets,
+  scrubSecrets, scrubValueDeep,
   parseScalar, serializeScalar,
   parseRecord, serializeRecord,
   validateFrontmatter,

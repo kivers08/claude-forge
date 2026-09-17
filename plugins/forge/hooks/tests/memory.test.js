@@ -177,6 +177,188 @@ t('writeRecord scrubs secrets nested in extra (not just body/frontmatter)', () =
   assert.ok(!/ghp_y{36}/.test(onDisk), 'nested extra secret must not reach disk');
   assert.ok(onDisk.includes('[REDACTED'), onDisk);
   assert.ok(res.redactions.length >= 2, 'both extra secrets reported as redactions');
+  // The nested map must SURVIVE (scrubbed), not be thrown away — proves the
+  // secret is absent because it was redacted, not because the whole object was
+  // stringified to `[object Object]` and lost (regression guard for bug #1).
+  assert.ok(onDisk.includes('metadata:'), 'nested metadata block survives');
+  assert.ok(onDisk.includes('nested:'), 'nested child key survives');
+  assert.ok(!onDisk.includes('[object Object]'), 'object must not be stringified away');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('round-trips a nested extra.metadata object AND an array (bug #1)', () => {
+  const record = {
+    frontmatter: { id: 'nest-1', type: 'note', scope: 'reviewer' },
+    extra: {
+      metadata: { type: 'feedback', level: 3 },
+      tags: ['alpha', 'beta', 'gamma'],
+    },
+    body: 'body text',
+  };
+  const out = mem.serializeRecord(record);
+  // Objects/arrays must never degrade to [object Object] / a,b,c.
+  assert.ok(!out.includes('[object Object]'), out);
+  const reparsed = mem.parseRecord(out);
+  // A one-level map round-trips into the block-form string parseRecord produces.
+  assert.ok(String(reparsed.extra.metadata).includes('type: feedback'), out);
+  assert.ok(String(reparsed.extra.metadata).includes('level: 3'), out);
+  // The array round-trips into a block sequence string, items preserved.
+  assert.ok(String(reparsed.extra.tags).includes('- alpha'), out);
+  assert.ok(String(reparsed.extra.tags).includes('- gamma'), out);
+  // And re-serializing is byte-stable (no data drift on a second pass).
+  assert.strictEqual(mem.serializeRecord(reparsed), out, 're-serialize must be stable');
+});
+
+t('an indented line under a TYPED schema key is skipped, not appended (bug #2)', () => {
+  const src = [
+    '---',
+    'id: sk-1',
+    'type: note',
+    'scope: reviewer',
+    'supersedes: null',
+    '  anything: here',   // stray indented line under a scalar schema key
+    '---',
+    'body',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  // supersedes must stay null (not become "\n  anything: here", which is truthy
+  // and would trigger a bogus archive on write).
+  assert.strictEqual(parsed.frontmatter.supersedes, null, JSON.stringify(parsed.frontmatter));
+});
+
+t('writeRecord defaults the full schema on a minimal write (bug #3)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'min-1', type: 'note', scope: 'implementer' },
+    body: 'minimal',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const fm = mem.parseRecord(onDisk).frontmatter;
+  assert.strictEqual(fm.tier, 'semantic');
+  assert.strictEqual(fm.importance, 0.5);
+  assert.strictEqual(fm.lastUsed, null);
+  assert.strictEqual(fm.uses, 0);
+  assert.strictEqual(fm.source, 'authored');
+  assert.strictEqual(fm.supersedes, null);
+  assert.strictEqual(fm.created, '2026-09-16T00:00:00.000Z');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('scopeDir rejects path-traversal scope/plugin segments (security #4)', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.scopeDir(root, 'forge', '../evil'), /invalid plugin\/scope/);
+  assert.throws(() => mem.scopeDir(root, 'forge', 'a/b'), /invalid plugin\/scope/);
+  assert.throws(() => mem.scopeDir(root, 'forge', '..'), /invalid plugin\/scope/);
+  assert.throws(() => mem.scopeDir(root, '../x', 'reviewer'), /invalid plugin\/scope/);
+  // writeRecord must refuse a crafted scope (write-outside-repo primitive).
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: '../../../tmp/evil',
+    frontmatter: { id: 'e', type: 'note' }, body: 'x',
+    now: '2026-09-16T00:00:00.000Z',
+  }), /invalid plugin\/scope/);
+  // readScope fails OPEN (returns []) rather than throwing on a bad segment.
+  assert.deepStrictEqual(mem.readScope(root, 'forge', '../evil'), []);
+  // A legitimate scope still works.
+  assert.ok(mem.scopeDir(root, 'forge', 'reviewer').endsWith('forge-reviewer'));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord stamps the redaction caveat into a record that had a redaction (#5)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'cav-1', type: 'note', scope: 'reviewer' },
+    body: 'leaked AKIAIOSFODNN7EXAMPLE here',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(onDisk.includes('redacted: true'), onDisk);
+  assert.ok(onDisk.includes('redactionCaveat:'), onDisk);
+  assert.ok(onDisk.includes('safety-net'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a clean record does NOT carry the redaction caveat (#5)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'cav-2', type: 'note', scope: 'reviewer' },
+    body: 'a perfectly ordinary lesson',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(!onDisk.includes('redacted: true'), onDisk);
+  assert.ok(!onDisk.includes('redactionCaveat:'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('secret-assignment does not re-redact an already-redacted value (#8)', () => {
+  // GITHUB_TOKEN= is matched first by github-token, then the broad
+  // secret-assignment pattern must NOT overwrite the specific label.
+  const { text, redactions } = mem.scrubSecrets('GITHUB_TOKEN=ghp_' + 'q'.repeat(36));
+  assert.ok(text.includes('[REDACTED:github-token]'), text);
+  assert.ok(!text.includes('[REDACTED:secret-assignment]'), 'must not double-redact: ' + text);
+  // Exactly one secret -> exactly one redaction (trustworthy telemetry).
+  assert.strictEqual(redactions.length, 1, JSON.stringify(redactions));
+});
+
+t('needsQuote flags YAML-special leading characters (#9)', () => {
+  for (const v of ['- item', '[a]', '{a}', '&anchor', '*alias', '!tag', '|block', '>fold', '`tick', '@at', '%pct']) {
+    const out = mem.serializeScalar(v);
+    assert.ok(out.startsWith('"'), `expected ${JSON.stringify(v)} to be quoted, got ${out}`);
+    // And it must round-trip back to the original.
+    assert.strictEqual(mem.parseScalar(out), v, `round-trip failed for ${JSON.stringify(v)}`);
+  }
+});
+
+t('validateFrontmatter rejects empty-string importance and uses (#10)', () => {
+  const pImp = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', importance: '' });
+  assert.ok(pImp.some((p) => /importance/.test(p)), pImp.join(';'));
+  const pUses = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: '' });
+  assert.ok(pUses.some((p) => /uses/.test(p)), pUses.join(';'));
+  // A bare `importance:` line parses to '' — a round-trip must be caught.
+  const parsed = mem.parseRecord('---\nid: x\ntype: note\nscope: s\nimportance:\n---\nb');
+  assert.ok(mem.validateFrontmatter(parsed.frontmatter).some((p) => /importance/.test(p)));
+});
+
+t('writeRecord scrubs a secret in a string frontmatter value (#7)', () => {
+  const root = tmpRoot();
+  // Drive the frontmatter-string scrub loop (memory.js) directly: a secret
+  // pasted into the `created` string schema field (emitted to disk, unconstrained
+  // content) must be scrubbed like any other string write path, and counted.
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: {
+      id: 'fm-scrub-1', type: 'note', scope: 'reviewer',
+      created: 'AKIAIOSFODNN7EXAMPLE',
+    },
+    body: 'clean',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(!/AKIAIOSFODNN7EXAMPLE/.test(onDisk), onDisk);
+  assert.ok(onDisk.includes('created:'), 'created field emitted to disk');
+  assert.ok(res.redactions.some((r) => r.kind === 'aws-access-key'), JSON.stringify(res.redactions));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('archive collision counter suffixes when the same id is superseded twice (#7)', () => {
+  const root = tmpRoot();
+  const write = (id, supersedes, body) => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id, type: 'fact', scope: 'reviewer', supersedes },
+    body, now: '2026-09-16T00:00:00.000Z',
+  });
+  write('dup', null, 'v0');
+  write('next-1', 'dup', 'v1');        // archives dup.md
+  write('dup', null, 'v2');            // recreate the id
+  const res = write('next-2', 'dup', 'v3'); // archives dup.md AGAIN -> suffix
+  const dir = mem.scopeDir(root, 'forge', 'reviewer');
+  const archived = fs.readdirSync(path.join(dir, mem.ARCHIVE_DIR)).sort();
+  assert.ok(archived.includes('dup.md'), archived.join(','));
+  assert.ok(archived.some((n) => /^dup\.\d+\.md$/.test(n)), 'expected a suffixed archive: ' + archived.join(','));
+  assert.ok(res.archived, 'second supersede returned an archive path');
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -347,6 +529,69 @@ t('newId returns a supplied id verbatim and generates a uuid otherwise', () => {
   assert.strictEqual(mem.newId('caller-supplied'), 'caller-supplied');
   const gen = mem.newId();
   assert.match(gen, /^[0-9a-f-]{36}$/, gen);
+});
+
+// --- migration script (temp fixture only, never the repo's real files) -----
+
+const migrate = require('../../../../scripts/migrate-agent-memory');
+
+t('migrateFile stamps the schema, is idempotent, and never touches real files (#7)', () => {
+  const root = tmpRoot();
+  const dir = path.join(root, 'forge-implementer');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'sample.md');
+  fs.writeFileSync(file, [
+    '---',
+    'name: sample',
+    'description: a pre-existing record',
+    'metadata:',
+    '  type: feedback',
+    '---',
+    '',
+    'Original body content.',
+  ].join('\n'));
+
+  const first = migrate.migrateFile(file, 'forge', 'implementer', false);
+  assert.strictEqual(first.action, 'migrate');
+  const afterFirst = fs.readFileSync(file, 'utf8');
+  const fm = mem.parseRecord(afterFirst).frontmatter;
+  assert.ok(fm.id, 'id stamped');
+  assert.strictEqual(fm.tier, 'semantic');
+  assert.strictEqual(fm.type, 'lesson', 'metadata type:feedback -> lesson');
+  // pre-existing frontmatter + body preserved
+  assert.ok(afterFirst.includes('name: sample'), afterFirst);
+  assert.ok(afterFirst.includes('description: a pre-existing record'), afterFirst);
+  assert.ok(afterFirst.includes('type: feedback'), afterFirst);
+  assert.ok(afterFirst.includes('Original body content.'), afterFirst);
+
+  // Re-run: a file that already has an id is a no-op, bytes identical.
+  const second = migrate.migrateFile(file, 'forge', 'implementer', false);
+  assert.strictEqual(second.action, 'skip');
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), afterFirst, 're-run must not churn');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('migrateFile scrubs a secret in an already-committed file (#6)', () => {
+  const root = tmpRoot();
+  const dir = path.join(root, 'forge-reviewer');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'leaky.md');
+  fs.writeFileSync(file, [
+    '---',
+    'name: leaky',
+    'description: has a secret AKIAIOSFODNN7EXAMPLE inline',
+    '---',
+    '',
+    'body with GITHUB_TOKEN=ghp_' + 'w'.repeat(36),
+  ].join('\n'));
+
+  const res = migrate.migrateFile(file, 'forge', 'reviewer', false);
+  const onDisk = fs.readFileSync(file, 'utf8');
+  assert.ok(!/AKIAIOSFODNN7EXAMPLE/.test(onDisk), 'extra secret scrubbed: ' + onDisk);
+  assert.ok(!/ghp_w{36}/.test(onDisk), 'body secret scrubbed: ' + onDisk);
+  assert.ok(onDisk.includes('[REDACTED'), onDisk);
+  assert.ok(res.redactions >= 2, 'both secrets reported: ' + res.redactions);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);
