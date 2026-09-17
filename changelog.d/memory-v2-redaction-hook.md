@@ -9,10 +9,19 @@ section: Security
 - The same containment test now also covers `.claude/agent-memory-local/`
   (native's gitignored local-scope memory), which the hook previously left
   unscrubbed entirely.
-- A 512 KB size guard: a file larger than that is left untouched rather than
-  read/scrubbed/rewritten. This hook runs synchronously inside the session,
-  and the `secret-assignment` pattern's backtracking cost grows with input
-  size, so an unbounded file could otherwise stall a turn.
+- `lib/redact.js`'s `secret-assignment` and `pem` patterns had unbounded
+  greedy/lazy quantifiers around their keyword/body groups, which is
+  vulnerable to catastrophic (O(n^2)) backtracking on adversarial input (e.g.
+  a long run of `[A-Za-z0-9_-]` characters with no match). Both are now
+  bounded (`{0,64}` on the keyword surroundings, `{0,8192}?` on the PEM body)
+  so the worst-case cost of a non-match no longer scales with input size.
+  This bound, not the size guard below, is the actual ReDoS fix.
+- A 64 KB size guard (previously 512 KB, sized to the old unbounded-regex
+  worst case): a file larger than that is left untouched rather than
+  read/scrubbed/rewritten. This hook runs synchronously inside the session;
+  the guard is now defense-in-depth on top of the bounded-quantifier fix
+  above, sized to real agent-memory note sizes rather than to a worst case
+  that no longer applies.
 
 section: Fixed
 - `lib/redact.js`'s `secret-assignment` pattern captured a surrounding quote
@@ -31,6 +40,13 @@ section: Fixed
   ALL-CAPS (`GITHUB_TOKEN`) or containing a `_`/`-` separator (`aws_secret`,
   `api-key`). A bare lowercase English word with no separator no longer
   matches.
+- `scrubSecrets` recorded a redaction unconditionally inside each pattern's
+  `replace` callback, even when the callback declined to change the text
+  (the `secret-assignment` prose-decline path returns the match unchanged).
+  Prose like `the secret: sauceology tastes great` was recording a phantom
+  `secret-assignment` redaction, over-counting the D10 audit telemetry. A
+  redaction is now recorded only when the replacement actually changed the
+  matched text.
 
 section: Docs
 - `memory-redact.js` now documents, next to its scope list, that user-scope

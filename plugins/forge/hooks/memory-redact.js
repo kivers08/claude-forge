@@ -54,12 +54,14 @@ const cfg = require('./lib/config');
 const redact = require('./lib/redact');
 
 // Cap the file we'll read/scrub/write: this hook runs synchronously inside
-// the session (D28.4 design note above), and the secret-assignment pattern's
-// backtracking cost grows with input size, so an unbounded file could stall a
-// turn. Legitimate agent-memory notes are nowhere near this size; a file this
+// the session (D28.4 design note above). The real ReDoS mitigation is the
+// bounded quantifiers in lib/redact.js's patterns (a legitimate match can
+// only ever backtrack across a bounded window regardless of input size) —
+// this cap is defense-in-depth on top of that, sized to real agent-memory
+// note sizes rather than to the old unbounded-regex worst case. A file this
 // large under agent-memory is almost certainly not one this hook should be
 // touching in-band.
-const MAX_SCRUB_BYTES = 512 * 1024;
+const MAX_SCRUB_BYTES = 64 * 1024;
 
 const MEMORY_SUBDIRS = ['.claude/agent-memory', '.claude/agent-memory-local'];
 

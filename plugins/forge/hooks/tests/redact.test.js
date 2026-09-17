@@ -151,5 +151,48 @@ t('null/undefined input does not throw', () => {
   assert.strictEqual(redact.scrubSecrets(undefined).text, '');
 });
 
+t('a prose near-match that declines redaction records zero redactions', () => {
+  const before = 'the secret: sauceology tastes great\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before);
+  assert.strictEqual(redactions.length, 0);
+});
+
+t('a real secret-assignment still records exactly one redaction of the right kind', () => {
+  const { text, redactions } = redact.scrubSecrets('DEPLOY_SECRET=supersecretvalue123\n');
+  assert.ok(text.includes('DEPLOY_SECRET=[REDACTED:secret-assignment]'), text);
+  assert.strictEqual(redactions.length, 1);
+  assert.strictEqual(redactions[0].kind, 'secret-assignment');
+});
+
+t('a file with both a real secret and a prose near-match records exactly one redaction', () => {
+  const before = 'DEPLOY_SECRET=supersecretvalue123\nthe secret: sauceology tastes great\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.ok(text.includes('DEPLOY_SECRET=[REDACTED:secret-assignment]'), text);
+  assert.ok(text.includes('the secret: sauceology tastes great'), text);
+  assert.strictEqual(redactions.length, 1);
+  assert.strictEqual(redactions[0].kind, 'secret-assignment');
+});
+
+t('a long run of secret-assignment-keyword-class characters with no match does not hang (ReDoS regression)', () => {
+  const input = 'a-'.repeat(262144); // 512 KiB, all in [A-Za-z0-9_-], no keyword present
+  const start = process.hrtime.bigint();
+  const { text, redactions } = redact.scrubSecrets(input);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.strictEqual(text, input);
+  assert.strictEqual(redactions.length, 0);
+  assert.ok(elapsedMs < 1000, `expected < 1000ms, took ${elapsedMs}ms`);
+});
+
+t('an unterminated PEM BEGIN block does not scan to EOF (ReDoS regression)', () => {
+  const input = '-----BEGIN RSA PRIVATE KEY-----\n' + 'M'.repeat(200 * 1024) + '\n';
+  const start = process.hrtime.bigint();
+  const { text, redactions } = redact.scrubSecrets(input);
+  const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  assert.strictEqual(text, input, 'unterminated PEM block must be left unchanged');
+  assert.strictEqual(redactions.length, 0);
+  assert.ok(elapsedMs < 1000, `expected < 1000ms, took ${elapsedMs}ms`);
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

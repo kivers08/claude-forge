@@ -20,8 +20,12 @@ const REDACTION_PATTERNS = [
   // `ENCRYPTED ` is included: an encrypted private key is still a private key
   // and no later token pattern would catch the block.
   {
+    // The body is a BOUNDED lazy [\s\S]{0,8192}? (a PEM key body is a few KB;
+    // 8 KB is ample) rather than an unbounded [\s\S]*? — an unterminated
+    // BEGIN line would otherwise force the engine to scan all the way to EOF
+    // once per BEGIN before giving up, which is O(k*n) in file size.
     kind: 'pem',
-    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]{0,8192}?-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
     replace: () => '[REDACTED:pem]',
   },
   // AWS access key id.
@@ -76,8 +80,14 @@ const REDACTION_PATTERNS = [
     // A keyword qualifies only if it is ALL-CAPS (GITHUB_TOKEN, SECRET) or
     // contains a `_`/`-` separator (aws_secret, api-key) — a bare lowercase
     // word with no separator (secret, token, password) does not.
+    // The keyword's surrounding classes are BOUNDED ({0,64}, not the
+    // unbounded *) — an unbounded class-star around an 8-way alternation is
+    // vulnerable to catastrophic backtracking (O(n^2)) on adversarial input
+    // like a long run of `[A-Za-z0-9_-]` characters containing no match. A
+    // real env/config key is well under 64 chars, so this bound never affects
+    // a legitimate match.
     kind: 'secret-assignment',
-    re: /\b([A-Za-z0-9_-]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API[_-]KEY|ACCESS[_-]KEY|PRIVATE[_-]KEY)[A-Za-z0-9_-]*)(\s*[=:]\s*)(["']?)(?!\[REDACTED:)([^\s"']{6,})\3/gi,
+    re: /\b([A-Za-z0-9_-]{0,64}(?:SECRET|TOKEN|PASSWORD|APIKEY|API[_-]KEY|ACCESS[_-]KEY|PRIVATE[_-]KEY)[A-Za-z0-9_-]{0,64})(\s*[=:]\s*)(["']?)(?!\[REDACTED:)([^\s"']{6,})\3/gi,
     replace: (m, kw, sep, quote) => {
       const looksLikeIdentifier = kw === kw.toUpperCase() || /[_-]/.test(kw);
       return looksLikeIdentifier ? `${kw}${sep}${quote}[REDACTED:secret-assignment]${quote}` : m;
@@ -100,8 +110,14 @@ function scrubSecrets(input) {
   const redactions = [];
   for (const p of REDACTION_PATTERNS) {
     text = text.replace(p.re, (...args) => {
-      redactions.push({ kind: p.kind });
-      return p.replace(...args);
+      const out = p.replace(...args);
+      // Only record a redaction when the replacement actually changed the
+      // text: secret-assignment's prose-decline path returns the match
+      // unchanged (see the identifier check above), and counting that as a
+      // redaction would over-count telemetry and corrupt D10 audit counts
+      // for text that was never touched.
+      if (out !== args[0]) redactions.push({ kind: p.kind });
+      return out;
     });
   }
   return { text, redactions };
