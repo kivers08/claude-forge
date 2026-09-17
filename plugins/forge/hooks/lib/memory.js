@@ -164,9 +164,21 @@ function parseScalar(raw) {
   if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
     return v.slice(1, -1);
   }
-  // Number, but only if it round-trips exactly (avoid mangling ids/dates).
-  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
-  if (/^-?\d*\.\d+$/.test(v)) return parseFloat(v);
+  // Number, but only if it round-trips exactly (avoid mangling ids/dates). A
+  // shape match alone is not enough: '007' matches the integer regex but
+  // parseInt('007', 10) === 7, and String(7) !== '007' — that would silently
+  // drop the leading zero (and similarly mangle an oversized int that loses
+  // precision as a JS number). Compare the stringified-back value against the
+  // original text and only coerce when they match exactly; otherwise keep it
+  // as the original string.
+  if (/^-?\d+$/.test(v)) {
+    const n = parseInt(v, 10);
+    return String(n) === v ? n : v;
+  }
+  if (/^-?\d*\.\d+$/.test(v)) {
+    const n = parseFloat(v);
+    return String(n) === v ? n : v;
+  }
   return v;
 }
 
@@ -391,8 +403,8 @@ function validateFrontmatter(fm) {
   if (fm.uses !== undefined && fm.uses !== null) {
     const isIntShape = typeof fm.uses === 'number'
       || /^-?\d+$/.test(String(fm.uses));
-    if (!isIntShape || !Number.isInteger(Number(fm.uses))) {
-      problems.push('uses must be an integer');
+    if (!isIntShape || !Number.isInteger(Number(fm.uses)) || Number(fm.uses) < 0) {
+      problems.push('uses must be a non-negative integer');
     }
   }
   return problems;
@@ -495,6 +507,9 @@ function readScope(root, plugin, scope) {
   } catch (e) {
     return []; // no such scope yet — fail open, empty
   }
+  // Deterministic order: fs.readdirSync's order is filesystem-dependent, and
+  // this module otherwise avoids any non-determinism (D11, see the header note).
+  names.sort();
   const records = [];
   for (const name of names) {
     if (name === 'MEMORY.md') continue; // index, not a record (§8)
@@ -502,7 +517,12 @@ function readScope(root, plugin, scope) {
     const full = path.join(dir, name);
     let raw;
     try {
-      const st = fs.statSync(full);
+      // lstatSync (NOT statSync) so a symlinked entry is never followed: a
+      // record file that is a symlink to an external regular file would
+      // otherwise pass an isFile() check made on the link's TARGET, silently
+      // contradicting the per-scope containment this function advertises.
+      // Symlinked entries are skipped, same as any other unreadable file.
+      const st = fs.lstatSync(full);
       if (!st.isFile()) continue;
       raw = fs.readFileSync(full, 'utf8');
     } catch (e) {
@@ -602,8 +622,7 @@ function writeRecord(opts) {
   }
   // Default the full §3.2 schema so a record written via the happy path has
   // every ranking field on disk (unit 3's recall reads lastUsed/uses/tier/
-  // importance/source — §3.3). `now` stamps lastUsed alongside created when the
-  // caller supplies it; otherwise lastUsed starts null.
+  // importance/source — §3.3).
   if (fm.lastUsed === undefined) fm.lastUsed = null;
   if (fm.uses === undefined) fm.uses = 0;
   if (fm.supersedes === undefined) fm.supersedes = null;
@@ -653,10 +672,18 @@ function writeRecord(opts) {
   }
 
   // Archive a superseded record if asked. Keep the old file (history), never
-  // delete it (§3.2).
+  // delete it (§3.2). `supersedesId` is attacker-reachable frontmatter (or an
+  // opts value) that ends up straight in a filename passed to archiveRecord's
+  // renameSync — an unvalidated value like `../../../etc/passwd` would move a
+  // file from OUTSIDE the scope dir into the committed store. Validate with
+  // the same isSafeId() charset the record's own id already goes through,
+  // and throw (write path, not fail-open) before archiveRecord ever runs.
   let archived = null;
   const supersedesId = opts.supersedesId || fm.supersedes;
   if (supersedesId) {
+    if (!isSafeId(supersedesId)) {
+      throw new Error(`writeRecord: unsafe supersedes id (must match ${SAFE_ID_RE}, not '.'/'..', and not end in .md): ${supersedesId}`);
+    }
     fm.supersedes = supersedesId;
     archived = archiveRecord(dir, supersedesId);
   }
@@ -699,8 +726,12 @@ function writeRecord(opts) {
 // calls assertContained(root, dir) before ever reaching here); this function
 // additionally guards the archive dir itself, since that is a second directory
 // a planted symlink could target independently of the scope dir.
+// `id` is expected to already be isSafeId()-validated by the caller (writeRecord
+// does this before calling here); assertContained on src/dest below is defense
+// in depth in case a future caller forgets that check.
 function archiveRecord(dir, id) {
   const src = path.join(dir, recordFileName(id));
+  assertContained(dir, src);
   try {
     if (!fs.statSync(src).isFile()) return null;
   } catch (e) {
@@ -724,6 +755,7 @@ function archiveRecord(dir, id) {
     dest = path.join(archiveDir, `${recordFileName(id).replace(/\.md$/, '')}.${n}.md`);
     n++;
   }
+  assertContained(dir, dest);
   // fs failure here is fatal: if the rename fails, the old record is still
   // live, so the caller must NOT go on to write the superseding record as if
   // the archive succeeded. Let it throw (writeRecord already throws on a bad

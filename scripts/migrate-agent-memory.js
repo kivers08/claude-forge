@@ -13,11 +13,24 @@
 // NOT auto-migrate this repo; this script is the safe seed the full
 // archive-model adoption migration (unit 8) generalizes.
 //
+// This script is a SAFE SEED for unit 1 ONLY, deliberately narrower than the
+// full D28.2 adoption path. The following are KNOWN, DEFERRED gaps (a CI
+// review pass flagged them; they are not implemented here on purpose — see
+// TASK 7 of the unit 1 hardening dispatch):
+//   * it does not archive the PRISTINE original file before mutating it;
+//   * it writes in place rather than via memory.js's atomic tmp+rename;
+//   * it does not validate the plugin/scope directory segments it derives
+//     against memory.js's SEGMENT_RE before using them.
+// All three, plus test coverage for main()/dry-run, land in unit 8 alongside
+// the archive-model rewrite below — see the TODO immediately following.
+//
 // TODO(unit 8, D28.2): archive-model + explicit adoption. This in-place-additive
 // seed must be generalized to: move the PRISTINE original to
-// `.claude/agent-memory/_pre-migration/<scope>/` (never delete), be idempotent,
-// and run only via the `bootstrap` skill / `forge memory migrate` command a
-// human invokes — not automatically.
+// `.claude/agent-memory/_pre-migration/<scope>/` (never delete), write via an
+// atomic tmp+rename (matching memory.js's writeRecord), validate every
+// plugin/scope segment against SEGMENT_RE before deriving a path from it, be
+// idempotent, and run only via the `bootstrap` skill / `forge memory migrate`
+// command a human invokes — not automatically.
 //
 // Every write here runs through the same scrubSecrets path memory.js uses on
 // every write (plan §3.4: "Every write runs the redaction scrubber first"), so

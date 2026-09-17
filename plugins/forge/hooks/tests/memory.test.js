@@ -838,5 +838,152 @@ t('writeRecord does not scrub the id even when it matches a redaction shape (bug
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+// --- forge:reviewer finding (SECURITY, task 1): unvalidated supersedes -----
+
+t('writeRecord throws on a path-traversal supersedes in frontmatter, moves nothing outside scope', () => {
+  const root = tmpRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mem-outside-'));
+  fs.writeFileSync(path.join(outside, 'passwd.md'), 'not a record, just a target file');
+  try {
+    assert.throws(() => mem.writeRecord({
+      root, plugin: 'forge', scope: 'reviewer',
+      frontmatter: {
+        id: 'sup-1', type: 'note', scope: 'reviewer',
+        supersedes: '../../../etc/passwd',
+      },
+      body: 'x', now: '2026-09-16T00:00:00.000Z',
+    }), /unsafe supersedes id/);
+    // Nothing must have been created/moved outside the scope dir.
+    assert.deepStrictEqual(fs.readdirSync(outside), ['passwd.md']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+t('writeRecord throws on a path-traversal opts.supersedesId', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'sup-2', type: 'note', scope: 'reviewer' },
+    supersedesId: '../../evil',
+    body: 'x', now: '2026-09-16T00:00:00.000Z',
+  }), /unsafe supersedes id/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a normal supersede of a real in-scope id still archives correctly (regression)', () => {
+  const root = tmpRoot();
+  mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'ok-old', type: 'fact', scope: 'reviewer' },
+    body: 'v0', now: '2026-09-16T00:00:00.000Z',
+  });
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'ok-new', type: 'fact', scope: 'reviewer', supersedes: 'ok-old' },
+    body: 'v1', now: '2026-09-16T01:00:00.000Z',
+  });
+  assert.ok(res.archived, 'expected an archive path');
+  assert.ok(fs.existsSync(res.archived));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// --- forge:reviewer finding (SECURITY, task 2): readScope follows symlinks -
+
+t('readScope skips a symlinked record file pointing outside the scope dir', () => {
+  const root = tmpRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mem-outside-'));
+  const outsideFile = path.join(outside, 'external.md');
+  fs.writeFileSync(outsideFile, [
+    '---',
+    'id: external',
+    'type: note',
+    'scope: reviewer',
+    '---',
+    '',
+    'external content, must not be surfaced',
+  ].join('\n'));
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'real-1', type: 'note', scope: 'reviewer' },
+    body: 'real record', now: '2026-09-16T00:00:00.000Z',
+  });
+  const dir = path.dirname(res.file);
+  const linkPath = path.join(dir, 'linked.md');
+  fs.symlinkSync(outsideFile, linkPath, 'file');
+  try {
+    const recs = mem.readScope(root, 'forge', 'reviewer');
+    assert.deepStrictEqual(recs.map((r) => r.frontmatter.id), ['real-1'], JSON.stringify(recs.map((r) => r.frontmatter.id)));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+// --- forge:reviewer finding (BUG, task 3): parseScalar round-trip ----------
+
+t('parseScalar preserves values that do not round-trip exactly as numbers', () => {
+  assert.strictEqual(mem.parseScalar('007'), '007');
+  assert.strictEqual(mem.parseScalar('0.50'), '0.50');
+  // Still coerces the values that DO round-trip exactly.
+  assert.strictEqual(mem.parseScalar('7'), 7);
+  assert.strictEqual(mem.parseScalar('0.5'), 0.5);
+});
+
+t('a leading-zero frontmatter/extra value round-trips byte-stable', () => {
+  // A bare (unquoted) '007' on disk is parsed as the string '007' (not the
+  // number 7, which would lose the leading zero — see parseScalar). Once
+  // parsed, re-serializing quotes it (needsQuote treats any numeric-looking
+  // scalar as needing quotes so a re-parse can't misread it as a number) —
+  // that quoted form is still the value '007', and IT round-trips byte-stable
+  // from then on: parse -> serialize -> parse yields the same value forever.
+  const src = [
+    '---',
+    'id: lz-1',
+    'type: note',
+    'scope: reviewer',
+    'code: 007',
+    '---',
+    '',
+    'body',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  assert.strictEqual(parsed.extra.code, '007', JSON.stringify(parsed.extra));
+  const out = mem.serializeRecord(parsed);
+  const reparsed = mem.parseRecord(out);
+  assert.strictEqual(reparsed.extra.code, '007', JSON.stringify(reparsed.extra));
+  // From the quoted form onward, serialize/parse is exactly byte-stable.
+  assert.strictEqual(mem.serializeRecord(reparsed), out);
+});
+
+// --- forge:reviewer finding (task 4): deterministic read order -------------
+
+t('readScope returns records in sorted filename order', () => {
+  const root = tmpRoot();
+  mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'zzz-last', type: 'note', scope: 'reviewer' },
+    body: 'z', now: '2026-09-16T00:00:00.000Z',
+  });
+  mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'aaa-first', type: 'note', scope: 'reviewer' },
+    body: 'a', now: '2026-09-16T00:00:00.000Z',
+  });
+  const recs = mem.readScope(root, 'forge', 'reviewer');
+  assert.deepStrictEqual(recs.map((r) => r.frontmatter.id), ['aaa-first', 'zzz-last']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// --- forge:reviewer finding (task 5): reject negative uses -----------------
+
+t('validateFrontmatter rejects a negative uses count', () => {
+  const problems = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: -1 });
+  assert.ok(problems.some((p) => /uses must be a non-negative integer/.test(p)), problems.join(';'));
+  assert.deepStrictEqual(mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: 0 }), []);
+  assert.deepStrictEqual(mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: 3 }), []);
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);
