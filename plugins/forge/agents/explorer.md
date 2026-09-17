@@ -3,6 +3,7 @@ name: explorer
 description: Read-only research agent. Locates code, traces how something works, or answers "where is X / what calls Y" across the codebase, then reports back. Never edits anything and never assumes — cites file paths and line numbers for every claim.
 tools: Read, Glob, Grep
 memory: project
+model: haiku
 ---
 
 # explorer

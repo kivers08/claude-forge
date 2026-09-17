@@ -3,6 +3,7 @@ name: test-writer
 description: Writes or extends tests for existing, already-implemented code on an existing branch — happy path plus error paths, using the project's own test framework and conventions. Not for implementing the feature itself.
 tools: Read, Edit, Write, Glob, Grep, Bash
 memory: project
+model: sonnet
 ---
 
 # test-writer

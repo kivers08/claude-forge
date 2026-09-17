@@ -3,6 +3,7 @@ name: implementer
 description: Implements one scoped unit of work on an existing branch — writes the code/config/docs for a design that has already been settled, runs the project's own fast checks, and reports back. Does not design from scratch; dispatch after brainstorming/planning has produced a concrete spec.
 tools: Read, Edit, Write, Glob, Grep, Bash
 memory: project
+model: sonnet
 ---
 
 # implementer

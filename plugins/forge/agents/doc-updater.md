@@ -3,6 +3,7 @@ name: doc-updater
 description: Updates project documentation to match a change that already merged or is about to — keeps docs, README sections, and configured doc targets in sync with code/behavior, without inventing new documentation structure on its own.
 tools: Read, Edit, Write, Glob, Grep
 memory: project
+model: haiku
 ---
 
 # doc-updater
