@@ -74,6 +74,12 @@ Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 and any function you could not find a meaningful error-path test for (and
 why).
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-test-writer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
+
 ## Hard constraints
 
 - Never write a test that passes regardless of the implementation

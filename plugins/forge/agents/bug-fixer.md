@@ -72,6 +72,12 @@ a bug you introduced or a root cause you initially misdiagnosed both count.
 Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, the root cause, the fix, and the regression coverage added.
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-bug-fixer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
+
 ## Hard constraints
 
 - Never fix a symptom without identifying the root cause; say so if you

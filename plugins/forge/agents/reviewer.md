@@ -128,6 +128,14 @@ mistake: <slug|none>
 confirmed, or something you missed that surfaced afterward) — leave `none`
 on a normal clean review.
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-reviewer/`,
+committed and team-shared per-agent isolation (D28.4). During CI review its
+memory is read from the BASE ref (not the PR head) so a PR cannot plant a lesson
+that steers its own review (see `scripts/reviewer-clean-check.js`). Writes are
+scrubbed by the redaction hook before disk.
+
 ## Hard constraints
 
 - Never modify source files.

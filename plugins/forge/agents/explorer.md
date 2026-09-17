@@ -61,6 +61,12 @@ mistake: <slug|none>
 `mistake` here means a search that missed something obvious, or a claim
 that turned out to be wrong when checked later — leave `none` otherwise.
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-explorer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
+
 ## Hard constraints
 
 - Never state a claim about code you have not actually read.

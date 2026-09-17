@@ -75,6 +75,12 @@ Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, what changed, what verified it, and anything left undone or
 uncertain.
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-implementer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
+
 ## Hard constraints
 
 - Never widen the unit's scope on your own judgment — ask (via your report)
