@@ -206,7 +206,10 @@ function readReviewerMemoryFromBase(base) {
     '-c', 'core.quotePath=false',
     'ls-tree', '-r', '--name-only', '-z', `origin/${base}`, '--', REVIEWER_MEMORY_DIR,
   ], {
-    cwd: ROOT, encoding: 'utf8',
+    // maxBuffer matches the sibling git captures (changedInstructionSurfaces,
+    // computeAndWriteDiff): without it a >1 MiB capture ENOBUFS-fails with a
+    // git-shaped error that hides the real (size) cause and wedges the check.
+    cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
   });
   if (probe.error) return { error: `git ls-tree failed: ${probe.error.message}` };
   if (probe.status !== 0) return { error: `git ls-tree exited ${probe.status} for ${REVIEWER_MEMORY_DIR}` };
@@ -216,7 +219,7 @@ function readReviewerMemoryFromBase(base) {
 
   const parts = [];
   for (const f of files) {
-    const r = spawnSync('git', ['-c', 'core.quotePath=false', 'show', `origin/${base}:${f}`], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync('git', ['-c', 'core.quotePath=false', 'show', `origin/${base}:${f}`], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     if (r.error) return { error: `git show failed for ${f}: ${r.error.message}` };
     if (r.status !== 0) return { error: `git show exited ${r.status} for ${f}` };
     parts.push(`--- ${f} ---\n${r.stdout}`);
