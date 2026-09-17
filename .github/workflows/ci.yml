@@ -4,6 +4,27 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Draft PRs run NO CI (each job below has a `draft == false` gate), so the
+    # intermediate build/review/fix commits on a unit branch don't churn the
+    # single self-hosted runner. `ready_for_review` is listed so that marking a
+    # PR ready — the deliberate "this unit is done" signal — fires the workflow
+    # and runs the full suite exactly once. `synchronize` still covers pushes to
+    # an already-ready PR (e.g. a post-CI fix), which should re-run.
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Single self-hosted runner: without this, every push to an already-ready PR
+# queues another full set of jobs behind the ones still running, and the queue
+# — not the ~7s of actual check work — becomes the wall-clock cost. Group per
+# ref and cancel superseded runs.
+#
+# Safe for the `reviewer clean` commit status specifically: that status is
+# posted per head SHA, so cancelling the run for a superseded SHA cannot leave
+# the SHA anyone would merge without a status. Pushes to main are NOT cancelled
+# (github.run_id makes each its own group), since a main run is the record for
+# a commit that is already merged.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Fork-PR safety (all jobs): a fork PR is arbitrary untrusted code that this
@@ -24,24 +45,41 @@ jobs:
     # token the default GITHUB_TOKEN doesn't have), so this variable is the
     # manual switch: flip it in Settings > Secrets and variables > Actions >
     # Variables when kewi-dev is up, flip it back if it goes down.
+    # Draft gate: skip while the PR is a draft; still runs on push-to-main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
+    # The whole suite is ~7s of real work; anything past a couple of minutes
+    # means a hung child process, not a slow check. On the single self-hosted
+    # runner an unbounded hang wedges every other job behind it, and the
+    # Actions default is 360 minutes.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      # Fail-fast ordering, cheapest-and-broadest first. This step needs no
+      # Node at all, so it runs before setup-node: a CRLF-infected branch is
+      # rejected in seconds instead of after the full suite.
+      - name: LF line endings enforced
+        run: |
+          if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then
+            echo "CRLF found"; exit 1
+          fi
       - uses: actions/setup-node@v6
         with:
           node-version: '22.x'
+      # Broadest gate in the suite: a syntax error anywhere invalidates every
+      # test below it, so it stays first among the Node steps. `-P 4` parses
+      # the ~40 files concurrently — the cost here is process spawn, not
+      # parsing, so the fan-out is most of the step's runtime.
       - name: node --check every .js
         run: |
           set -e
-          find plugins scripts -name '*.js' -print0 | xargs -0 -n1 node --check
+          find plugins scripts -name '*.js' -print0 | xargs -0 -P 4 -n1 node --check
       - name: Node-only manifest and frontmatter validator
         run: node scripts/validate-plugins.js --strict
-      - name: Hook unit runs (forge)
-        run: node plugins/forge/hooks/tests/run.js
+      # Sub-100ms unit tests next: highest signal per second, and they cover
+      # the tier resolver and hook surfaces the slower suites build on.
       - name: Tier resolver unit tests (D17)
         run: node plugins/forge/hooks/tests/tier.test.js
-      - name: Hook unit runs (smoke)
-        run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
       - name: Project SessionStart hook unit tests
         run: .claude/hooks/tests/session-start.test.sh
       - name: reviewer-clean-check unit tests
@@ -50,11 +88,12 @@ jobs:
         run: node scripts/tests/changelog.test.js
       - name: t0-auto-merge unit tests (revoke attribution, state tri-state)
         run: node scripts/tests/t0-auto-merge.test.js
-      - name: LF line endings enforced
-        run: |
-          if git ls-files --eol | grep -E 'w/crlf|w/mixed'; then
-            echo "CRLF found"; exit 1
-          fi
+      # Slowest deterministic steps last, so a cheap failure never pays for
+      # them. `run.js` alone is ~3s — roughly half the suite's total work.
+      - name: Hook unit runs (forge)
+        run: node plugins/forge/hooks/tests/run.js
+      - name: Hook unit runs (smoke)
+        run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
       - name: claude plugin validate --strict (if CLI installs)
         continue-on-error: true
         run: |
@@ -86,7 +125,13 @@ jobs:
     # cannot disagree, and this is the check name branch protection will
     # eventually require (D20).
     name: forge validators
+    # Draft gate: skip while the PR is a draft; still runs on push-to-main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
+    # ~1s of work. Deliberately kept as its own job rather than folded into
+    # `validate`: it is the required check name (D20), so it must stay
+    # independently reportable and must not inherit `validate`'s failures.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -121,7 +166,21 @@ jobs:
     # outcome, not an oversight: a fork PR is exactly the case that should not
     # be able to self-certify.
     name: reviewer clean
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # Fail fast: this is the single most expensive thing CI does — a `claude -p`
+    # reviewer dispatch, capped at 15 minutes, holding the one self-hosted
+    # runner and burning the owner's subscription quota. Never start it for a
+    # PR that a ~1s deterministic check already rejected. Both gates are
+    # draft-gated the same way this job is, so a draft PR skips all three
+    # together and this cannot deadlock.
+    #
+    # Trade-off, deliberate: when `validate` or `forge validators` fails, this
+    # job is skipped and posts NO `reviewer clean` status for that SHA (it is
+    # an API commit status, not a check run, so skipping posts nothing). Once
+    # D26 makes the context required, such a SHA reads pending rather than
+    # failing. It is unmergeable either way — the deterministic check is red —
+    # and the next push re-runs the chain.
+    needs: [validate, forge-validators]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
     runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -203,11 +262,20 @@ jobs:
     # runner is fine here — no self-hosted `claude` login is needed, only
     # `gh` (preinstalled on GitHub-hosted runners) and Node.
     name: T0 auto-merge (D19)
+    # Gated on the deterministic checks for the same reason `reviewer clean`
+    # is, plus a stronger one: this job opens a merge path, and a merge path
+    # must not open before the checks that would block the merge have passed.
+    # Runs on a GitHub-hosted runner, so the gate costs latency, not VPS time.
+    needs: [validate, forge-validators]
     # Same-repo only, like `reviewer clean`: this job can enable auto-merge,
     # so a fork PR must never reach it. It needs no self-hosted runner, but
     # it does make a merge decision, which is the stronger reason to gate it.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    # Bounded like every other job: the Actions default of 360 minutes is not
+    # a useful failure mode for a job that resolves a tier and makes one API
+    # call.
+    timeout-minutes: 10
     permissions:
       # INTERIM, deliberately below what the feature needs. `gh pr merge
       # --auto` runs the enablePullRequestAutoMerge mutation, which needs
