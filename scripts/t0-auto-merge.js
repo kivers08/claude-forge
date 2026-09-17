@@ -243,15 +243,18 @@ function main() {
   // Draft PRs: GitHub refuses to enable auto-merge on one, so `gh pr merge
   // --auto` would fail and redden this job on every agent-opened PR — forge's
   // own pr-create guard requires --draft when git.draftPrRequired is set,
-  // which is the default. Not an error, just "not yet". KNOWN GAP: ci.yml uses
-  // the default pull_request types, which exclude ready_for_review, so a PR
-  // marked ready with no further push does not re-run this job. Adding
-  // ready_for_review to the SHARED trigger was tried and reverted: skipping the
-  // other jobs on that event replaced their real check runs with `skipped`
-  // ones, which branch protection counts as success, so a draft that went red
-  // could be marked ready and auto-merge on that same event. The correct shape
-  // is this job in its own workflow on pull_request_target (it needs no PR
-  // checkout at all) — tracked in D19, its own unit.
+  // which is the default. Not an error, just "not yet". ci.yml's `t0-auto-merge`
+  // job is deliberately NOT draft-gated in the workflow `if:` (unlike
+  // `reviewer-clean`), specifically so this branch stays reachable and the
+  // revoke call below still fires on a draft event — the job now DOES run for
+  // drafts, it just declines to enable and instead tears down any stale grant.
+  // `ready_for_review` is in the shared `pull_request` trigger's `types:`, so a
+  // PR marked ready re-runs this job and re-decides without needing a further
+  // push. KNOWN GAP, still open: the workflow FILE itself still comes from the
+  // PR's merge ref, so a PR can append a step to this job and inherit its
+  // token. The correct shape is this job in its own workflow on
+  // `pull_request_target` (it needs no PR checkout at all) — tracked in D19,
+  // its own follow-up unit.
   if (pr.draft) {
     log(`PR #${prNumber} is a draft; auto-merge cannot be enabled yet — push after marking ready to re-decide`);
     // Same invariant as every other early return: a PR that was T0 and got
