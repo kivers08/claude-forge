@@ -105,11 +105,23 @@ first session would violate forge's "no invisible standing policy" posture (§2.
 and could surprise an adopter. Detection may *notice* unadapted memory and
 prompt, but the rewrite itself is human-initiated.
 
-**Non-destructive guarantee (the "Bluegrass rule"):** additive where possible
-(add frontmatter in place), archive-not-delete otherwise (`_archive/`, §3.2),
-**idempotent** (re-run is a no-op), and it must **never remove a pre-existing
-record or its content**. A fixture simulating a consumer repo with pre-existing
-memory (including a non-memory-v2 shape) guards this.
+**Non-destructive guarantee (the "Bluegrass rule"):** the migration **never
+removes a pre-existing record or its content** and is **idempotent** (re-run is
+a no-op). A fixture simulating a consumer repo with pre-existing memory
+(including a non-memory-v2 shape) guards this.
+
+**Archive the originals — don't mix formats (added 2026-09-16).** After
+converting an existing file to a memory-v2 record, the migration **moves the
+pristine pre-migration original into an out-of-the-way archive directory** (e.g.
+`.claude/agent-memory/_pre-migration/<scope>/…`, mirroring the source layout) —
+NOT deleted, and NOT left beside the new record. So the live agent-memory path
+holds *only* clean memory-v2 records after migration, while every raw original
+is preserved untouched in the archive. This avoids old-format/new-format
+confusion in the active directory while still guaranteeing nothing is lost. The
+archive is distinct from the per-scope `_archive/` used for superseded records
+(§3.2): that one is runtime supersede history; this one is the one-time
+pre-migration snapshot. Applies to BOTH Unit 1's self-migration and Unit 8's
+adoption migration.
 
 **Effect on the unit plan:** unit 1's `migrate-agent-memory.js` is the seed of
 this (in-place additive migration of this repo's own files). A dedicated
