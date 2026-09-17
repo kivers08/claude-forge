@@ -40,6 +40,49 @@ the owner accepts, edits, or rejects before any unit is dispatched
 
 ---
 
+## D28.1 — Storage & recall engine (SETTLED 2026-09-16, brainstorm)
+
+Owner-confirmed decision closing the storage/recall questions left open in
+§3.1 and §9. Recorded via `forge:brainstorm` (research only; nothing built).
+
+**Decision: embedded, git-synced, lexical-first.**
+- **Canonical store:** committed markdown under `.claude/agent-memory/**` — the
+  source of truth. It syncs across the owner's two servers (dev and nebula) for
+  free via `git pull`, and stays diff-visible/gated per §4.
+- **Local index:** `node:sqlite` (its built-in FTS5 gives BM25 directly — less
+  code than a hand-rolled JS index). Rebuildable and never authoritative
+  (`forge memory reindex`), so `node:sqlite`'s "experimental" status is low-risk.
+- **Recall:** lexical **BM25 core** now. A dense/semantic reranker (RRF-fused)
+  is **deferred** — a zero-migration bolt-on later, since adding vectors leaves
+  the canonical markdown store unchanged.
+
+**Consequence — D11 amendment:** the Node floor rises from ≥20 to **≥22.5**
+(`node:sqlite` availability). Both target boxes run 22.23. D11 must be updated
+to reflect this when the epic lands.
+
+**Scope confirmed:** memory-v2 is forge's per-agent **AI-coding memory**
+(lessons agents learn while working), **not** a client/business-data store.
+
+**Options considered & rejected:**
+- *Networked vector/relational DB (qdrant, chroma, postgres+pgvector).*
+  Rejected. It breaks forge's install-anywhere / D13 posture; across two servers
+  it needs either one shared instance (latency + single point of failure +
+  security surface) or a custom cross-box sync that the git-committed store
+  gives for free; and at forge's scale (agent lessons — the owner's entire
+  business is ~3k client records after 10 years, and memory is smaller than
+  that) ANN indexing yields no measurable benefit over embedded FTS/brute-force.
+- *Stdlib JSON index instead of `node:sqlite`.* Viable and zero-dependency, but
+  more of our own code (hand-rolled BM25) with no offsetting benefit; FTS5 is
+  simpler. Retained as the mental fallback if the 22.5 floor ever becomes a
+  problem.
+
+**Still deferred (unchanged from §9):** which embedder for the optional dense
+reranker (unit 7); whether ambient write is on by default for non-reviewer
+agents; the exact record `type` set beyond fact/lesson/decision/note; and the
+unverified CLI-behavior questions in §6.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
@@ -93,11 +136,11 @@ the owner accepts, edits, or rejects before any unit is dispatched
   shared `.claude/agent-memory/forge-coordinator/` scope. This is the source of
   truth — diff-visible, gated, revocable by `git revert`.
 - **Local index (rebuildable, git-ignored):** a single
-  `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar. **Evaluate `node:sqlite`**
-  (built-in from Node 22.5; the CI runner and dev boxes are on 22.x — but D11
-  currently says Node ≥ 20, so **using it raises the floor to 22.5 and that must
-  be an explicit D28 sub-decision**). Fallback: a stdlib JSON index. The index is
-  never authoritative; `forge memory reindex` rebuilds it from the markdown.
+  `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar built on **`node:sqlite`**
+  (SETTLED — see D28.1; its FTS5 gives BM25 directly). This raises forge's Node
+  floor to **≥22.5**, an accepted D11 amendment; both target boxes run 22.23.
+  Stdlib JSON is the retained fallback. The index is never authoritative;
+  `forge memory reindex` rebuilds it from the markdown.
 
 ### 3.2 Record schema (to settle in review — field names not yet verified)
 
@@ -249,8 +292,9 @@ Order lands the stdlib lexical core before anything optional; the security unit
 
 ## 9. Not resolved (explicit)
 
-- The `node:sqlite` floor-raise (Node 22.5) vs. staying stdlib-JSON — an owner
-  call, recorded as a D28 sub-decision.
+- ~~The `node:sqlite` floor-raise (Node 22.5) vs. staying stdlib-JSON~~ —
+  **RESOLVED (D28.1, 2026-09-16): `node:sqlite` chosen; Node floor raised to
+  ≥22.5.**
 - Which embedder (if any) for unit 7 — name, size, license to be settled then.
 - Whether ambient write is on by default for non-reviewer agents or opt-in.
 - The exact record `type` set beyond fact/lesson/decision/note.
