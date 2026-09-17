@@ -93,6 +93,44 @@ t('a colon-separated secret-assignment (YAML-style) is redacted', () => {
   assert.ok(text.includes('api_key: [REDACTED:secret-assignment]'), text);
 });
 
+t('a single-quoted secret-assignment preserves both surrounding single quotes', () => {
+  const { text } = redact.scrubSecrets("FOO_SECRET='abc123def456'\n");
+  assert.ok(text.includes("FOO_SECRET='[REDACTED:secret-assignment]'"), text);
+  assert.ok(!text.includes('abc123def456'), text);
+  // No orphaned trailing quote and no dropped opening quote.
+  assert.ok(!text.includes("[REDACTED:secret-assignment]'\n'"), text);
+});
+
+t('prose using the word "secret" as a plain English noun is left unchanged', () => {
+  const before = 'the secret: sauce is the special ingredient\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before);
+  assert.strictEqual(redactions.length, 0);
+});
+
+t('prose using the word "password" as a plain English noun is left unchanged', () => {
+  const before = 'password: is a bad idea to reuse across sites\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before);
+  assert.strictEqual(redactions.length, 0);
+});
+
+t('an ALL-CAPS secret-assignment keyword is still redacted despite the prose tightening', () => {
+  const { text } = redact.scrubSecrets('FOO_SECRET=hunter2hunter2\n');
+  assert.ok(text.includes('FOO_SECRET=[REDACTED:secret-assignment]'), text);
+});
+
+t('a colon-separated ALL-CAPS token assignment is still redacted', () => {
+  const { text } = redact.scrubSecrets('API_TOKEN: abc123abc123\n');
+  assert.ok(text.includes('API_TOKEN: [REDACTED:secret-assignment]'), text);
+});
+
+t('a lowercase-with-underscore secret-assignment keyword is still redacted', () => {
+  const { text } = redact.scrubSecrets("aws_secret_key='xxxxxxxxxxxx'\n");
+  assert.ok(text.includes("aws_secret_key='[REDACTED:secret-assignment]'"), text);
+  assert.ok(!text.includes('xxxxxxxxxxxx'), text);
+});
+
 t('a secret-assignment value already redacted by a more specific pattern is not double-counted', () => {
   const before = 'GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n';
   const { text, redactions } = redact.scrubSecrets(before);

@@ -56,18 +56,32 @@ const REDACTION_PATTERNS = [
   },
   // *_SECRET= / *_TOKEN= / *_KEY= / *_PASSWORD= assignment forms. The keyword
   // (the LHS + `=`) is preserved so the record still reads sensibly; only the
-  // value is scrubbed. The surrounding quote (group 2, if any) is captured so
+  // value is scrubbed. The surrounding quote (group 3, if any) is captured so
   // it can be re-emitted on BOTH sides of the placeholder — dropping it would
   // turn `FOO_SECRET="abc"` into the malformed `FOO_SECRET=[REDACTED:...]"`
   // (an orphaned trailing quote) instead of `FOO_SECRET="[REDACTED:...]"`.
+  // The quote class is `["']?` (not `"?`) so a SINGLE-quoted value like
+  // `FOO_SECRET='abc123'` is matched too, not just double-quoted/unquoted.
   {
     // The `(?!\[REDACTED:)` guard stops this (broad) pattern from re-redacting a
     // value an EARLIER, more-specific pattern already replaced (e.g. a
     // GITHUB_TOKEN= that became `[REDACTED:github-token]`). Without it the
     // specific kind label is lost and `redactions` double-counts one secret.
+    //
+    // The keyword itself (group 1) is matched loosely by the regex — any case,
+    // with or without a separator — and then validated in `replace` below:
+    // it must look like an IDENTIFIER (env var / config key), not an ordinary
+    // English word, or this pattern corrupts prose in a memory note (this
+    // store is prose) like "the secret: sauce" or "password: is a bad idea".
+    // A keyword qualifies only if it is ALL-CAPS (GITHUB_TOKEN, SECRET) or
+    // contains a `_`/`-` separator (aws_secret, api-key) — a bare lowercase
+    // word with no separator (secret, token, password) does not.
     kind: 'secret-assignment',
-    re: /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)("?)(?!\[REDACTED:)([^\s"']{6,})\2/gi,
-    replace: (m, kw, quote) => `${kw}${quote}[REDACTED:secret-assignment]${quote}`,
+    re: /\b([A-Za-z0-9_-]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API[_-]KEY|ACCESS[_-]KEY|PRIVATE[_-]KEY)[A-Za-z0-9_-]*)(\s*[=:]\s*)(["']?)(?!\[REDACTED:)([^\s"']{6,})\3/gi,
+    replace: (m, kw, sep, quote) => {
+      const looksLikeIdentifier = kw === kw.toUpperCase() || /[_-]/.test(kw);
+      return looksLikeIdentifier ? `${kw}${sep}${quote}[REDACTED:secret-assignment]${quote}` : m;
+    },
   },
 ];
 

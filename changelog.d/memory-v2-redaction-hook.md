@@ -19,6 +19,26 @@ section: Fixed
   but the replacement dropped it, turning `FOO_SECRET="abc"` into the
   malformed `FOO_SECRET=[REDACTED:secret-assignment]"` (orphaned trailing
   quote). The quote is now preserved on both sides of the placeholder.
+- `secret-assignment`'s quote group only matched double-quotes or unquoted
+  values (`("?)...\2`), so a SINGLE-quoted secret like
+  `FOO_SECRET='abc123def456'` was never redacted at all. The quote class is
+  now `["']?`, covering single-quoted, double-quoted, and unquoted forms.
+- `secret-assignment`'s keyword side matched any English word containing
+  "secret"/"token"/"password"/etc. followed by `:`/`=`, so ordinary prose in
+  a memory note (this store is prose) — e.g. `the secret: sauce` or
+  `password: is a bad idea` — was silently corrupted into a redaction. The
+  keyword must now look like an identifier (env var / config key): either
+  ALL-CAPS (`GITHUB_TOKEN`) or containing a `_`/`-` separator (`aws_secret`,
+  `api-key`). A bare lowercase English word with no separator no longer
+  matches.
+
+section: Docs
+- `memory-redact.js` now documents, next to its scope list, that user-scope
+  memory (`~/.claude/agent-memory/`) is intentionally out of scope for
+  redaction: forge's user-level-write guard already blocks writes under
+  `~/.claude`, so this hook could never rewrite a file there, and user-scope
+  memory is machine-local/personal rather than the committed/shared surface
+  this hook protects. A recorded decision, not an oversight.
 
 section: Added
 - Direct unit tests for `lib/redact.js`'s `scrubSecrets` in the new

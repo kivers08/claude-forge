@@ -111,6 +111,15 @@ t('a quoted FOO_SECRET= assignment preserves its surrounding quotes', () => {
   assert.ok(!after.includes('abc123def456'), after);
 });
 
+t('a single-quoted FOO_SECRET= assignment preserves its surrounding single quotes', () => {
+  const before = "FOO_SECRET='abc123def456'\n";
+  const r = run('Write', '.claude/agent-memory/forge-implementer/x.md', before);
+  assert.strictEqual(r.status, 0);
+  const after = fs.readFileSync(r.absPath, 'utf8');
+  assert.ok(after.includes("FOO_SECRET='[REDACTED:secret-assignment]'"), after);
+  assert.ok(!after.includes('abc123def456'), after);
+});
+
 t('a clean agent-memory .md file is left byte-identical', () => {
   const before = '---\nname: clean\ndescription: nothing sensitive\n---\n\nJust plain notes.\n';
   const r = run('Write', '.claude/agent-memory/forge-implementer/clean.md', before);

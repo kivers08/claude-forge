@@ -26,6 +26,12 @@
 // file (the only shape native memory writes). Anything else is left
 // untouched.
 //
+// User-scope memory (~/.claude/agent-memory/) is intentionally NOT covered
+// here, by design rather than oversight: forge's user-level-write guard
+// already blocks writes under ~/.claude, so this hook could never rewrite a
+// file there anyway, and user-scope memory is machine-local/personal, not
+// the committed/shared surface this hook exists to protect.
+//
 // The containment test resolves the target to a real absolute path FIRST
 // (path.resolve, which collapses `..` and mixed separators) and then checks
 // containment with path.relative against each memory root — mirroring the
