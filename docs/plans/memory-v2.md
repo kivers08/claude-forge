@@ -40,6 +40,222 @@ the owner accepts, edits, or rejects before any unit is dispatched
 
 ---
 
+## D28.1 — Storage & recall engine (SETTLED 2026-09-16, brainstorm)
+
+Owner-confirmed decision closing the storage/recall questions left open in
+§3.1 and §9. Recorded via `forge:brainstorm` (research only; nothing built).
+
+**Decision: embedded, git-synced, lexical-first.**
+- **Canonical store:** committed markdown under `.claude/agent-memory/**` — the
+  source of truth. It syncs across the owner's two servers (dev and nebula) for
+  free via `git pull`, and stays diff-visible/gated per §4.
+- **Local index:** `node:sqlite` (its built-in FTS5 gives BM25 directly — less
+  code than a hand-rolled JS index). Rebuildable and never authoritative
+  (`forge memory reindex`), so `node:sqlite`'s "experimental" status is low-risk.
+- **Recall:** lexical **BM25 core** now. A dense/semantic reranker (RRF-fused)
+  is **deferred** — a zero-migration bolt-on later, since adding vectors leaves
+  the canonical markdown store unchanged.
+
+**Consequence — D11 amendment (now CONDITIONAL, see D28.4):** `node:sqlite`'s
+FTS5 would raise the Node floor from ≥20 to **≥22.5**. As of the D28.4 re-scope
+this only applies **if** the optional visible/ranked-recall path (which is what
+needs the index) actually ships; the thin-layer core relies on native subagent
+memory and needs no index, so the floor stays at ≥20 until then. Both target
+boxes run 22.23 regardless, so the raise is free when we take it.
+
+**Scope confirmed:** memory-v2 is forge's per-agent **AI-coding memory**
+(lessons agents learn while working), **not** a client/business-data store.
+
+**Options considered & rejected:**
+- *Networked vector/relational DB (qdrant, chroma, postgres+pgvector).*
+  Rejected. It breaks forge's install-anywhere / D13 posture; across two servers
+  it needs either one shared instance (latency + single point of failure +
+  security surface) or a custom cross-box sync that the git-committed store
+  gives for free; and at forge's scale (agent lessons — the owner's entire
+  business is ~3k client records after 10 years, and memory is smaller than
+  that) ANN indexing yields no measurable benefit over embedded FTS/brute-force.
+- *Stdlib JSON index instead of `node:sqlite`.* Viable and zero-dependency, but
+  more of our own code (hand-rolled BM25) with no offsetting benefit; FTS5 is
+  simpler. Retained as the mental fallback if the 22.5 floor ever becomes a
+  problem.
+
+**Still deferred (unchanged from §9):** which embedder for the optional dense
+reranker (unit 7); whether ambient write is on by default for non-reviewer
+agents; and the unverified CLI-behavior questions in §6. *(The record `type` set
+was later SETTLED by D28.3 — Anthropic's `user|feedback|project|reference` plus
+`decision` — so it is no longer deferred.)*
+
+---
+
+## D28.2 — Adoption migration: adapt a consumer repo's existing memory (SETTLED 2026-09-16)
+
+Owner-confirmed, via `forge:brainstorm`. Distinct from D28.1 (which settled the
+storage engine); this settles what happens on *adoption*.
+
+**Decision:** when forge is installed/activated into a repository that ALREADY
+has agent memory or lessons (in any prior shape), forge **adapts those existing
+files into the memory-v2 record format** — restructures them into the schema at
+the correct per-agent locations — **non-destructively: content is preserved,
+files are never deleted, and existing records are updated/merged in place, never
+overwritten or dropped.** This is the plugin's own capability applied to the
+*consumer* repo's memory. It is explicitly NOT about shipping this dev-repo's
+lessons to consumers — there is no dev-lesson "seed."
+
+**Trigger (chosen — option i):** adaptation runs **at adoption, explicitly** —
+via the `bootstrap` skill and a `forge memory migrate` command the human runs
+once when adding forge — NOT silently on first SessionStart. Rationale:
+rewriting a repo's files is a deliberate, visible act; a silent auto-rewrite on
+first session would violate forge's "no invisible standing policy" posture (§2.2)
+and could surprise an adopter. Detection may *notice* unadapted memory and
+prompt, but the rewrite itself is human-initiated.
+
+**Non-destructive guarantee (the "Bluegrass rule"):** the migration **never
+removes a pre-existing record or its content** and is **idempotent** (re-run is
+a no-op). A fixture simulating a consumer repo with pre-existing memory
+(including a non-memory-v2 shape) guards this.
+
+**Archive the originals — don't mix formats (added 2026-09-16).** After
+converting an existing file to a memory-v2 record, the migration **moves the
+pristine pre-migration original into an out-of-the-way archive directory** (e.g.
+`.claude/agent-memory/_pre-migration/<scope>/…`, mirroring the source layout) —
+NOT deleted, and NOT left beside the new record. So the live agent-memory path
+holds *only* clean memory-v2 records after migration, while every raw original
+is preserved untouched in the archive. This avoids old-format/new-format
+confusion in the active directory while still guaranteeing nothing is lost. The
+archive is distinct from the per-scope `_archive/` used for superseded records
+(§3.2): that one is runtime supersede history; this one is the one-time
+pre-migration snapshot. Applies to BOTH Unit 1's self-migration and Unit 8's
+adoption migration.
+
+**Effect on the unit plan:** unit 1's `migrate-agent-memory.js` is the seed of
+this (in-place additive migration of this repo's own files). A dedicated
+adoption-migration unit (§7 unit 8) generalizes it.
+
+---
+
+## D28.3 — Record schema: Anthropic-superset, single vocabulary (SETTLED 2026-09-16)
+
+Owner-confirmed. Closes the "field names not yet verified" note in §3.2 and the
+"exact record `type` set" item deferred in D28.1.
+
+**Decision: a memory-v2 record IS a valid Anthropic native-memory record, extended.**
+Rather than invent a parallel schema and keep two formats side by side, memory-v2
+records are a strict **superset** of Claude Code's documented memory format:
+
+- `name` and `description` stay at the **top level** (Anthropic fields). The
+  `description` is load-bearing — it is the native memory tool's relevance key,
+  and memory-v2's recall keeps it.
+- All of forge's operational/ranking fields move **under the `metadata:` block**
+  the Anthropic format already provides: `type`, `scope`, `id`, `tier`,
+  `importance`, `created`, `lastUsed`, `uses`, `source`, `supersedes`.
+
+**Type vocabulary: Anthropic's set + one forge extension.**
+`user | feedback | project | reference` (Anthropic) **plus `decision`** (a coding
+agent needs a decisions log the four subject-types don't cover). An unknown
+`type` value degrades gracefully — a native reader still sees a valid
+`name`/`description`/`metadata` record.
+
+**Why superset, not a new schema (owner: "I don't think we need two schemas"):**
+- One format. A consumer repo's existing native-memory records are already ~90%
+  conformant — adoption migration (D28.2) just adds the `metadata.*` ranking
+  fields, rather than translating into a foreign vocabulary.
+- Native compatibility. A file memory-v2 writes is still readable by Claude
+  Code's own memory tool.
+- Confirmed by research: the claude-code-guide agent found forge's subagent
+  *definition* format already tracks Anthropic's spec exactly; aligning the
+  *record* format closes the last divergence.
+
+**Consequence — parser gains bounded one-level nesting.** Unit 1's parser, which
+was flat-scalar-only, adds support for exactly one level of `metadata:` nesting
+(read into a real object, serialized back as an indented block). No deeper
+nesting; the injection-safe serializer (the multiline-block guard) still governs
+every value. This reshapes Unit 1's record layout — decided **before Unit 1
+merges**, so Wave 2 builds on the final schema.
+
+**Migration mapping (for D28.2 / Unit 8):** `feedback→feedback`,
+`project→project`, `user→user`, `reference→reference` (the old top-level or
+`metadata.type` value is carried through); forge's own decisions use
+`type: decision`. The pristine original is archived per D28.2 regardless.
+
+---
+
+## D28.4 — Re-scope: thin safety/visibility layer over NATIVE subagent memory (SETTLED 2026-09-17)
+
+Owner-confirmed. This is the biggest course change in the epic and it **supersedes
+the "build a storage subsystem" framing** in §1/§3/§7 below.
+
+**Why.** Claude Code shipped native subagent memory (`memory: <scope>`, v2.1.33)
+and Auto Dream consolidation (v2.1.59). We verified on this machine
+(v2.1.197) — from the shipped binary's own strings **and** files already on disk
+in this repo — that native:
+- writes to **`.claude/agent-memory/<plugin>-<agent>/`** (project scope,
+  git-committed; `user` → `~/.claude/…`; `local` → `.claude/agent-memory-local/`,
+  auto-gitignored) — i.e. **exactly D28's `<plugin>-<agent>` path**;
+- uses **`MEMORY.md` link-index (hub) + `<type>_<slug>.md` topic files (spokes)** —
+  our hub-and-spoke, verbatim;
+- uses the **D28.3 record format**: `name`/`description` top-level, `type` under
+  `metadata:`, body with **Why:**/**How to apply:**, `[[wikilinks]]` — the
+  nesting D28.3 chose is what native actually writes;
+- **auto-captures** lessons (Auto Memory, on by default) and **auto-consolidates**
+  (Auto Dream: dedup, contradiction resolution, size-prune of `MEMORY.md`).
+
+The `.claude/agent-memory/forge-reviewer|implementer|bug-fixer/` records in this
+repo are **native-captured**, not hand-authored — Auto Memory has been running on
+forge's agents already. D28.3 turned out to be byte-compatible with native.
+
+**Decision.** **Adopt native as the substrate. Stop building a parallel storage
+engine.** forge builds ONLY the layer native lacks. Concretely:
+
+- **BUILD (forge value native does not provide):**
+  1. **Redaction-on-write** — a hook (PreToolUse/PostToolUse) that scrubs
+     secrets/PII from any write under `.claude/agent-memory/**`. Native does *no*
+     redaction; a native reviewer memory in this repo literally documents a scrub
+     gap. This replaces Unit 1's scrubber, delivered as a hook not a library.
+  2. **Reviewer safety** — reviewer memory read from the **base ref**, and the
+     reviewer **excluded from untrusted auto-inject** (native auto-inject would
+     otherwise let a PR plant a lesson that steers its own review). Was Unit 4;
+     now the **highest-value** piece. Extends `reviewer-clean-check.js`.
+  3. **Adoption migration** — convert a consumer repo's *differently-shaped*
+     prior memory into the native format (target = native's format, so simpler
+     than before). Explicit, non-destructive, archive-originals (D28.2 stands).
+  4. **(Optional) visible/ranked recall** — BM25 + attributable injection over
+     native's silent, unranked auto-load. Deferred; only if the silent default
+     proves insufficient. This is the ONLY thing that would revive D28.1's
+     `node:sqlite`/Node-floor amendment — otherwise that amendment is moot.
+
+- **DROP (native or Auto Dream now covers it):**
+  - the hand-rolled storage/parser/serializer (**Unit 1 `lib/memory.js`**) —
+    **superseded; PR #7 / `claude/mv2-u1-record-schema` is NOT merged**;
+  - our own pruning/consolidation/auditor (Auto Dream does dedup + contradiction
+    + size-prune);
+  - **Unit 6** earned-usefulness measurement (deferred — highest cost, and
+    Anthropic's investment is going to consolidation, not measurement).
+
+**What still holds:** D28.3 (the record format — it *is* native's). D28.2
+(adoption migration + archive-originals). The security posture in §4 (memory is a
+reviewable, gated instruction surface) — now enforced via the reviewer-safety
+hook rather than a custom read path.
+
+**New unit breakdown (replaces §7):**
+1. **Redaction-on-write hook** (T1, security) — scrub `.claude/agent-memory/**`
+   writes; tests with a poisoned-secret fixture.
+2. **Reviewer safety** (T1, security) — base-ref memory read + reviewer
+   auto-inject exclusion in `reviewer-clean-check.js`; the instruction-surface
+   gate. *(Independent; can land first.)*
+3. **Agent memory config** (T2) — set `memory: project` on the worker agents that
+   benefit, reviewer handled specially; document each agent's scope.
+4. **Adoption migration** (T1, D28.2) — `bootstrap` + `forge memory migrate` for a
+   consumer repo whose prior memory is in a non-native shape; fixture-guarded.
+5. **(Optional, deferred) visible/ranked recall** (T2) — BM25 + attributable
+   injection; only if native's silent auto-load proves insufficient.
+
+**Consequence for in-flight work:** the storage-engine branches
+(`claude/mv2-u1-record-schema`, PR #7) are superseded. Salvageable pieces: the
+redaction scrubber (`scrubSecrets`/`scrubValueDeep`) and its tests migrate into
+unit 1's hook; the rest is retired.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
@@ -88,38 +304,51 @@ the owner accepts, edits, or rejects before any unit is dispatched
 
 ### 3.1 Storage split
 
+> **Amended by D28.4:** the canonical store below is now provided by **native
+> subagent memory** (`memory: <scope>`), which writes exactly this
+> `.claude/agent-memory/<plugin>-<agent>/` layout and format. The **local index
+> is OPTIONAL and deferred** — it (and the Node ≥22.5 raise) only ships with the
+> optional visible/ranked-recall path. The thin-layer core needs no index.
+
 - **Canonical (committed, reviewable):** `.claude/agent-memory/<plugin>-<agent>/`
   markdown records, one file per record, with YAML-ish frontmatter (§below). A
   shared `.claude/agent-memory/forge-coordinator/` scope. This is the source of
-  truth — diff-visible, gated, revocable by `git revert`.
-- **Local index (rebuildable, git-ignored):** a single
-  `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar. **Evaluate `node:sqlite`**
-  (built-in from Node 22.5; the CI runner and dev boxes are on 22.x — but D11
-  currently says Node ≥ 20, so **using it raises the floor to 22.5 and that must
-  be an explicit D28 sub-decision**). Fallback: a stdlib JSON index. The index is
-  never authoritative; `forge memory reindex` rebuilds it from the markdown.
+  truth — diff-visible, gated, revocable by `git revert`. **(Native writes this.)**
+- **Local index (OPTIONAL, deferred — see D28.4):** if the ranked-recall path
+  ships, a single `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar built on
+  **`node:sqlite`** (its FTS5 gives BM25 directly), which is what would raise the
+  Node floor to **≥22.5** (both target boxes run 22.23). Stdlib JSON is the
+  retained fallback. The index is never authoritative; `forge memory reindex`
+  rebuilds it from the markdown. Not part of the thin-layer core.
 
-### 3.2 Record schema (to settle in review — field names not yet verified)
+### 3.2 Record schema (SETTLED — see D28.3)
+
+A memory-v2 record is a strict **superset** of Claude Code's native memory
+format: `name`/`description` at top level, everything else under `metadata:`.
 
 ```
 --- (frontmatter) ---
-id:        <ulid-like, generated without Date.now/Math.random in hooks — see note>
-type:      fact | lesson | decision | note        # subset of PMB's ten; justify additions
-scope:     reviewer | implementer | bug-fixer | test-writer | doc-updater | explorer | coordinator
-tier:      working | episodic | semantic          # fade speed; recall promotes toward semantic
-importance: 0.0–1.0
-created:   <ISO8601, stamped by the writing process, not inside a hook>
-lastUsed:  <ISO8601 | null>
-uses:      <int>
-source:    authored | learning-block | ambient    # provenance — see §4
-supersedes: <id | null>                            # keyed-fact-style upsert; old kept, archived
+name:        <short-kebab-case-slug>                 # Anthropic memory field
+description: <one-line relevance summary>            # Anthropic field; drives recall relevance
+metadata:
+  type:       user | feedback | project | reference | decision   # Anthropic set + forge `decision`
+  scope:      reviewer | implementer | bug-fixer | test-writer | doc-updater | explorer | coordinator
+  id:         <uuid — generated without Date.now/Math.random in hooks>
+  tier:       working | episodic | semantic          # fade speed; recall promotes toward semantic
+  importance: 0.0–1.0
+  created:    <ISO8601 — stamped by the writing process, not inside a hook>
+  lastUsed:   <ISO8601 | null>
+  uses:       <int ≥ 0>
+  source:     authored | learning-block | ambient    # provenance — see §4
+  supersedes: <id | null>                            # keyed upsert; old kept, archived
 --- (body) ---
-<the record; for a lesson, follow with the D6 anchor convention>
+<the record; for feedback/project, structure as rule/fact + **Why:** + **How to apply:**
+ per Anthropic's guidance; a learning-block record follows the D6 anchor convention>
 ```
 
-`type` starts as a **small** set (fact/lesson/decision/note); PMB's goal,
-milestone, qa, git/file/code, image types are deferred until a concrete need —
-adding a type is cheap, removing one is not.
+The `type` set is Anthropic's four subject-types plus forge's `decision`
+extension (D28.3). PMB's goal/milestone/qa/git/file/code/image types are deferred
+until a concrete need — adding a type is cheap, removing one is not.
 
 ### 3.3 Recall pipeline (lexical core, optional rerank)
 
@@ -217,6 +446,13 @@ Cite the docs or test on a scratch project — do not guess.
 
 ## 7. Unit breakdown (each = one PR off `claude/units`, forge convention)
 
+> **SUPERSEDED by D28.4 (2026-09-17).** The unit list below reflects the original
+> "build a storage subsystem" plan. The active plan is the thin-layer unit
+> breakdown in **D28.4** (redaction hook, reviewer safety, agent config, adoption
+> migration, optional recall). Units 1/2/6 and the pruning/consolidation work here
+> are retired because native subagent memory + Auto Dream provide them. Kept for
+> history.
+
 1. **Record schema + `lib/memory.js`** (T1) — read/write committed records,
    redaction scrubber, migration of existing `.claude/agent-memory/**`. Tests.
 2. **Lexical index + `lib/bm25.js` + `reindex`** (T1) — stdlib only, git-ignored
@@ -228,9 +464,17 @@ Cite the docs or test on a scratch project — do not guess.
 6. **Earned-memory measurement** (T2) — Wilson intervals, measurement-only.
 7. **Optional dense reranker** (T2) — separately-installed embedder, RRF fuse;
    stdlib fallback stays the default. *(lands last)*
+8. **Adoption migration** (T1, D28.2) — generalize unit 1's
+   `migrate-agent-memory.js` into forge's install-time capability: adapt a
+   *consumer* repo's existing agent memory/lessons (any prior shape) into
+   memory-v2 format, **non-destructively** (additive / archive-not-delete,
+   idempotent, never removes content). Wire into the `bootstrap` skill + a
+   `forge memory migrate` command. Fixture: a repo with pre-existing memory in a
+   non-memory-v2 shape. Depends on unit 1.
 
 Order lands the stdlib lexical core before anything optional; the security unit
-(4) is independent and can go early.
+(4) is independent and can go early; the adoption migration (8) builds directly
+on unit 1.
 
 ---
 
@@ -244,14 +488,22 @@ Order lands the stdlib lexical core before anything optional; the security unit
   optionally turns a LEARNING block into a `source: learning-block` record at
   SubagentStop. SubagentStop auto-filing stays **experiment-gated** (D15) until
   measurement (unit 6) shows it earns its place.
+- **Adoption into another repo (D28.2):** when forge is installed into a repo
+  that already has agent memory, the same additive / archive-not-delete
+  migration (unit 8) adapts those files into memory-v2 format — run explicitly
+  at adoption (`bootstrap` / `forge memory migrate`), never silently, never
+  destructively, idempotent on re-run.
 
 ---
 
 ## 9. Not resolved (explicit)
 
-- The `node:sqlite` floor-raise (Node 22.5) vs. staying stdlib-JSON — an owner
-  call, recorded as a D28 sub-decision.
+- ~~The `node:sqlite` floor-raise (Node 22.5) vs. staying stdlib-JSON~~ —
+  **RESOLVED (D28.1) then made CONDITIONAL (D28.4): `node:sqlite` is chosen for
+  the OPTIONAL ranked-recall path only; the thin-layer core needs no index and
+  keeps the ≥20 floor until/unless that path ships.**
+- ~~The exact record `type` set~~ — **RESOLVED (D28.3): Anthropic's
+  `user|feedback|project|reference` + forge's `decision`.**
 - Which embedder (if any) for unit 7 — name, size, license to be settled then.
 - Whether ambient write is on by default for non-reviewer agents or opt-in.
-- The exact record `type` set beyond fact/lesson/decision/note.
 - The unverified CLI-behavior questions in §6.

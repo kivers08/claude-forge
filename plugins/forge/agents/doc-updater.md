@@ -3,6 +3,7 @@ name: doc-updater
 description: Updates project documentation to match a change that already merged or is about to — keeps docs, README sections, and configured doc targets in sync with code/behavior, without inventing new documentation structure on its own.
 tools: Read, Edit, Write, Glob, Grep
 memory: project
+model: haiku
 ---
 
 # doc-updater
@@ -78,6 +79,12 @@ Followed by `MISTAKE:` / `LESSON:` lines only when `mistake` is not `none`.
 Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, which docs you updated and why, and any doc you found stale
 but left untouched because it was out of scope.
+
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-doc-updater/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
 
 ## Hard constraints
 

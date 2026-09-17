@@ -3,6 +3,7 @@ name: bug-fixer
 description: Reproduces and fixes one reported bug on an existing branch — finds the root cause, applies the minimal fix, adds or extends a regression test, and reports back. Not for open-ended refactors or feature work.
 tools: Read, Edit, Glob, Grep, Bash
 memory: project
+model: sonnet
 ---
 
 # bug-fixer
@@ -70,6 +71,12 @@ Followed by `MISTAKE:` / `LESSON:` lines only when `mistake` is not `none` —
 a bug you introduced or a root cause you initially misdiagnosed both count.
 Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, the root cause, the fix, and the regression coverage added.
+
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-bug-fixer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
 
 ## Hard constraints
 

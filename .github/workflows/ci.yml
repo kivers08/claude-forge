@@ -83,6 +83,10 @@ jobs:
       # the tier resolver and hook surfaces the slower suites build on.
       - name: Tier resolver unit tests (D17)
         run: node plugins/forge/hooks/tests/tier.test.js
+      - name: memory-redact hook unit tests (D28.4)
+        run: node plugins/forge/hooks/tests/memory-redact.test.js
+      - name: redact lib unit tests (D28.4)
+        run: node plugins/forge/hooks/tests/redact.test.js
       - name: Project SessionStart hook unit tests
         run: .claude/hooks/tests/session-start.test.sh
       - name: reviewer-clean-check unit tests

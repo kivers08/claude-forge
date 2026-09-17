@@ -39,6 +39,12 @@
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/post-bash-rules.js", "${CLAUDE_PLUGIN_DATA}"] }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/memory-redact.js", "${CLAUDE_PLUGIN_DATA}"] }
+        ]
       }
     ],
     "Stop": [
