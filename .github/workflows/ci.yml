@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Draft PRs run NO CI (each job below has a `draft == false` gate), so the
+    # intermediate build/review/fix commits on a unit branch don't churn the
+    # single self-hosted runner. `ready_for_review` is listed so that marking a
+    # PR ready — the deliberate "this unit is done" signal — fires the workflow
+    # and runs the full suite exactly once. `synchronize` still covers pushes to
+    # an already-ready PR (e.g. a post-CI fix), which should re-run.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   # Fork-PR safety (all jobs): a fork PR is arbitrary untrusted code that this
@@ -24,6 +31,8 @@ jobs:
     # token the default GITHUB_TOKEN doesn't have), so this variable is the
     # manual switch: flip it in Settings > Secrets and variables > Actions >
     # Variables when kewi-dev is up, flip it back if it goes down.
+    # Draft gate: skip while the PR is a draft; still runs on push-to-main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
@@ -88,6 +97,8 @@ jobs:
     # cannot disagree, and this is the check name branch protection will
     # eventually require (D20).
     name: forge validators
+    # Draft gate: skip while the PR is a draft; still runs on push-to-main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ (vars.CORP_RUNNER == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
@@ -123,7 +134,7 @@ jobs:
     # outcome, not an oversight: a fork PR is exactly the case that should not
     # be able to self-certify.
     name: reviewer clean
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
     runs-on: ${{ vars.CORP_RUNNER == 'true' && fromJSON('["self-hosted", "dev"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -208,7 +219,7 @@ jobs:
     # Same-repo only, like `reviewer clean`: this job can enable auto-merge,
     # so a fork PR must never reach it. It needs no self-hosted runner, but
     # it does make a merge decision, which is the stronger reason to gate it.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     permissions:
       # INTERIM, deliberately below what the feature needs. `gh pr merge
