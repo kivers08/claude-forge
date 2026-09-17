@@ -158,6 +158,40 @@ t('writeRecord scrubs secrets in the body before persisting', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+t('writeRecord scrubs secrets nested in extra (not just body/frontmatter)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'x1', type: 'note', scope: 'reviewer' },
+    body: 'clean',
+    // extra carries migrated free-text (description) and a nested block
+    // (metadata) — both are write paths and must be scrubbed too.
+    extra: {
+      description: 'pasted AKIAIOSFODNN7EXAMPLE here',
+      metadata: { nested: 'GITHUB_TOKEN=ghp_' + 'y'.repeat(36) },
+    },
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(!/AKIAIOSFODNN7EXAMPLE/.test(onDisk), 'extra.description secret must not reach disk');
+  assert.ok(!/ghp_y{36}/.test(onDisk), 'nested extra secret must not reach disk');
+  assert.ok(onDisk.includes('[REDACTED'), onDisk);
+  assert.ok(res.redactions.length >= 2, 'both extra secrets reported as redactions');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('parseScalar is a true inverse of serializeScalar for escaped quotes/backslashes', () => {
+  // A value that both needs quoting (contains a colon) and contains a quote +
+  // backslash — serialize must escape, parse must unescape, byte-stable.
+  const original = 'he said: "a\\b"';
+  const round = mem.parseRecord(mem.serializeRecord({
+    frontmatter: { id: 'q1', type: 'note', scope: 'reviewer' },
+    extra: { note: original },
+    body: '',
+  }));
+  assert.strictEqual(round.extra.note, original, 'escaped value must round-trip exactly');
+});
+
 // --- supersedes upsert-and-archive ----------------------------------------
 
 t('supersedes archives the old record, keeps history, writes the new one', () => {

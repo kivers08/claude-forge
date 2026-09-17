@@ -141,8 +141,13 @@ function parseScalar(raw) {
   if (v === 'null' || v === '~') return null;
   if (v === 'true') return true;
   if (v === 'false') return false;
-  // Quoted string: strip the quotes, keep the literal inside.
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+  // Quoted string: strip the quotes. For double-quoted values invert
+  // serializeScalar's escaping (\\ and \") so parse is a true inverse of
+  // serialize; single-quoted values are taken literally.
+  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
+    return v.slice(1, -1).replace(/\\(["\\])/g, '$1');
+  }
+  if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
     return v.slice(1, -1);
   }
   // Number, but only if it round-trips exactly (avoid mangling ids/dates).
@@ -372,11 +377,30 @@ function recordFileName(id) {
 
 // Where superseded records are archived (§3.2: old kept, archived — never
 // destroyed). A sibling `_archive/` dir INSIDE the same scope, so history stays
-// per-scope and diff-visible, and readScope (which lists only the scope dir's
-// own entries, and skips non-files implicitly via the .md filter) does not
-// surface archived records as live ones... except _archive is a directory, so
-// the `.md` check would skip it anyway; we also guard by name.
+// per-scope and diff-visible. readScope does not surface archived records as
+// live ones: `_archive` is a directory, so it fails readScope's `.md` +
+// `isFile` filter. (There is no separate name guard — the directory nature is
+// what excludes it.)
 const ARCHIVE_DIR = '_archive';
+
+// Recursively scrub every string in a JSON-ish value, pushing each redaction
+// into `redactions`. Used for `extra`, which carries free-text non-schema
+// fields (a migrated `description`, `metadata`, etc.) — just as much a write
+// path as the body, so a secret pasted there must never reach disk unredacted.
+function scrubValueDeep(value, redactions) {
+  if (typeof value === 'string') {
+    const r = scrubSecrets(value);
+    for (const red of r.redactions) redactions.push(red);
+    return r.text;
+  }
+  if (Array.isArray(value)) return value.map((v) => scrubValueDeep(v, redactions));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = scrubValueDeep(value[k], redactions);
+    return out;
+  }
+  return value;
+}
 
 // Write (create or upsert) a record.
 //
@@ -390,8 +414,9 @@ const ARCHIVE_DIR = '_archive';
 //   supersedesId          — if set (or frontmatter.supersedes set), the named record's
 //                           file is archived (moved to _archive/) before this write.
 //
-// Every write scrubs the body AND the string frontmatter values through
-// scrubSecrets first. Refuses (throws) on an INVALID record — a bad write is a
+// Every write scrubs the body, the string frontmatter values, AND every string
+// nested in `extra` through scrubSecrets first. Refuses (throws) on an INVALID
+// record — a bad write is a
 // programming error the caller must see, distinct from a bad READ which fails
 // open. Returns { file, redactions, archived }.
 function writeRecord(opts) {
@@ -405,8 +430,9 @@ function writeRecord(opts) {
     if (!fm.created) fm.created = now;
   }
 
-  // Scrub. Body plus any string-valued frontmatter field (source content can
-  // land in either place).
+  // Scrub EVERY write path before bytes touch disk (§4): the body, each
+  // string-valued frontmatter field, and every string nested in `extra`
+  // (free-text non-schema fields like a migrated `description`/`metadata`).
   const scrubbedBody = scrubSecrets(opts.body == null ? '' : opts.body);
   const redactions = [...scrubbedBody.redactions];
   for (const k of Object.keys(fm)) {
@@ -416,6 +442,7 @@ function writeRecord(opts) {
       for (const red of r.redactions) redactions.push(red);
     }
   }
+  const scrubbedExtra = scrubValueDeep(opts.extra || {}, redactions);
 
   const problems = validateFrontmatter(fm);
   if (problems.length) {
@@ -438,7 +465,7 @@ function writeRecord(opts) {
   }
 
   const file = path.join(dir, recordFileName(fm.id));
-  const out = serializeRecord({ frontmatter: fm, extra: opts.extra || {}, body: scrubbedBody.text });
+  const out = serializeRecord({ frontmatter: fm, extra: scrubbedExtra, body: scrubbedBody.text });
   fs.writeFileSync(file, out);
   return { file, redactions, archived };
 }
