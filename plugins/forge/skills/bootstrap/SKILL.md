@@ -54,9 +54,20 @@ an existing configured project.
 2. Gather the handful of genuinely project-specific values via `brainstorm`
    if they aren't already stated (base branch, task file paths, stack line,
    lint/deploy commands). Don't guess these.
-3. Write the six items above.
-4. Validate `.claude/forge.json` against the schema before finishing —
+3. Check for pre-existing agent memory (D28.2). If `.claude/agent-memory/`
+   already exists and contains files that are NOT yet native memory-v2
+   records (no `metadata.id` — e.g. plain markdown lessons, a flat/older
+   frontmatter shape, or memory from a different tool entirely), **mention**
+   the `memory-migrate` skill (`forge memory migrate`) as an optional next
+   step and ask whether the human wants to run it now. Never run it as part
+   of `bootstrap` itself and never silently — adapting existing memory is a
+   separate, explicit decision from scaffolding a fresh config (see
+   `memory-migrate`'s own SKILL.md for what it does and its non-destructive
+   guarantee).
+4. Write the six items above.
+5. Validate `.claude/forge.json` against the schema before finishing —
    reuse the same validation logic `scripts/validate-plugins.js` uses for
    the plugin's own schema checks, applied here to the instance document.
-5. Report what was written, what was asked vs. defaulted, and anything the
-   human should double check.
+6. Report what was written, what was asked vs. defaulted, whether pre-existing
+   memory was found and what was decided about migrating it, and anything
+   else the human should double check.
