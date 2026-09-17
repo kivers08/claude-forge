@@ -70,6 +70,35 @@ after the entire test suite. It now runs before `setup-node`. The ~3s hook
 runs (half the suite's total work) moved to the end, and `node --check` fans
 out over `xargs -P 4`, since its cost is process spawn rather than parsing.
 
+### 5. Draft PRs still paid for the full suite — FIXED, with one deliberate
+exemption
+`validate`, `forge-validators` and `reviewer clean` now each carry
+`&& github.event.pull_request.draft == false` (or, for `reviewer clean`,
+`draft == false` alongside its existing same-repo/`needs` gates), and
+`ready_for_review` was added to the `pull_request` trigger's `types:` so
+marking a PR ready fires the workflow and re-decides every job exactly once,
+without the event-level skip that would otherwise post `skipped` check runs
+branch protection reads as passing (see D19 in `docs/decisions.md` for why
+that shape was tried and reverted once already).
+
+**`T0 auto-merge (D19)` does NOT get this gate, and that is deliberate, not
+a miss.** An earlier pass of this same change applied the identical
+`needs: [validate, forge-validators]` and `draft == false` clauses to it,
+by the same reasoning that correctly protects `reviewer clean`. That
+reasoning does not transfer: `t0-auto-merge` runs on `ubuntu-latest`
+(hosted), so gating it trades away latency, not the self-hosted VPS time this
+whole audit is about — there is no expensive job to protect here. Worse,
+`scripts/t0-auto-merge.js` REVOKES a stale auto-merge grant when a PR is a
+draft (among other cases), and a draft-gated `if:` on the job makes that
+revoke unreachable precisely when a PR most needs it — one converted back to
+draft after gaining a non-T0 commit would keep a grant no check has since
+re-validated. I reverted the gate on this job specifically and left
+`reviewer clean`'s untouched. The honest trade-off: if the ENABLE half of
+`t0-auto-merge.js` should still wait on the deterministic checks passing,
+that belongs inside the script — which can read check-run states itself
+before calling `gh pr merge --auto` — not in the workflow `if:`, which cannot
+distinguish "don't enable yet" from "don't revoke either."
+
 ## Open items — not changed, your call
 
 - **Duplicate `validate-plugins.js --strict`.** It runs in both `validate` and

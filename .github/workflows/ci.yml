@@ -4,10 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
-    # Draft PRs run NO CI (each job below has a `draft == false` gate), so the
+    # Draft PRs run no expensive/self-hosted CI: `validate`, `forge-validators`
+    # and `reviewer clean` each carry a `draft == false` gate, so the
     # intermediate build/review/fix commits on a unit branch don't churn the
-    # single self-hosted runner. `ready_for_review` is listed so that marking a
-    # PR ready — the deliberate "this unit is done" signal — fires the workflow
+    # single self-hosted runner. `t0-auto-merge` is the one exception — it
+    # runs on drafts too, on purpose, so its revoke path stays reachable (see
+    # that job's comment). `ready_for_review` is listed so that marking a PR
+    # ready — the deliberate "this unit is done" signal — fires the workflow
     # and runs the full suite exactly once. `synchronize` still covers pushes to
     # an already-ready PR (e.g. a post-CI fix), which should re-run.
     types: [opened, synchronize, reopened, ready_for_review]
@@ -96,6 +99,13 @@ jobs:
         run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
       - name: claude plugin validate --strict (if CLI installs)
         continue-on-error: true
+        # Step-level bound, separate from the job's 10-minute `timeout-minutes`:
+        # this step is tolerated-failure by design (an npm install that cannot
+        # complete is not this job's problem), but without its own timeout a
+        # stall here would burn the whole job budget and hard-fail `validate`
+        # via the job-level timeout instead of being swallowed by
+        # continue-on-error.
+        timeout-minutes: 3
         run: |
           # Skip the (re)install when claude is already on PATH — true on
           # the persistent self-hosted runner, where reviewer-clean already
@@ -262,15 +272,26 @@ jobs:
     # runner is fine here — no self-hosted `claude` login is needed, only
     # `gh` (preinstalled on GitHub-hosted runners) and Node.
     name: T0 auto-merge (D19)
-    # Gated on the deterministic checks for the same reason `reviewer clean`
-    # is, plus a stronger one: this job opens a merge path, and a merge path
-    # must not open before the checks that would block the merge have passed.
-    # Runs on a GitHub-hosted runner, so the gate costs latency, not VPS time.
-    needs: [validate, forge-validators]
+    # Deliberately NOT gated behind `needs`/draft the way `reviewer clean` is.
+    # This job runs on `ubuntu-latest` (hosted), so a `needs` gate here buys
+    # latency, not the self-hosted VPS time `reviewer clean`'s gating exists
+    # to save — there is no expensive-job cost to protect against. More
+    # importantly, `scripts/t0-auto-merge.js` has a REVOKE path: when a PR is
+    # a draft (or its diff/config cannot be resolved), it disables a stale
+    # auto-merge grant. Adding `needs: [validate, forge-validators]` and a
+    # `draft == false` clause here — as an earlier version of this file did —
+    # made the job skip outright on drafts, which makes the revoke path
+    # unreachable exactly when it matters (a PR converted back to draft after
+    # gaining a non-T0 commit), and reordered a security-relevant revoke
+    # behind checks that have nothing to do with whether a stale grant should
+    # be torn down. If gating the ENABLE path specifically (not the revoke
+    # path) on the deterministic checks is ever wanted, do it inside
+    # `t0-auto-merge.js`, which can read check-run states itself before
+    # calling `gh pr merge --auto` — not here, where it would gate revoke too.
     # Same-repo only, like `reviewer clean`: this job can enable auto-merge,
     # so a fork PR must never reach it. It needs no self-hosted runner, but
     # it does make a merge decision, which is the stronger reason to gate it.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     # Bounded like every other job: the Actions default of 360 minutes is not
     # a useful failure mode for a job that resolves a tier and makes one API

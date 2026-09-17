@@ -252,6 +252,28 @@ than command-line parsing (a proper pflag-grammar parser as its own tested
 module, or a signal that does not come from the command text at all), and its
 own unit.
 
+**REVISED 2026-09-17: `t0-auto-merge` is deliberately exempt from the
+draft/`needs` gating a CI cost-optimization pass added to every other job.**
+That pass gave `reviewer clean` (expensive, self-hosted) both
+`needs: [validate, forge-validators]` and `&& github.event.pull_request.draft
+== false`, correctly, to stop paying for a `claude -p` dispatch on a draft or
+on a diff a ~1s deterministic check would already reject. The same two
+clauses were also applied to `t0-auto-merge`, which was wrong: that job runs
+on `ubuntu-latest` (hosted), so gating it buys latency, not the self-hosted
+VPS time the optimization exists to save, and `t0-auto-merge.js` has a
+draft-triggered REVOKE path (see the fix log entry "The draft early return
+revokes auto-merge like every other early return") that a draft-gated `if:`
+makes unreachable — exactly when a stale grant most needs tearing down. The
+shared-trigger shape (`ready_for_review` in `pull_request.types`, per-job
+`draft == false` gates rather than gating the event itself) stays safe only
+because each job decides its own gate independently; it stops being safe the
+moment a job that must run unconditionally on drafts is folded into the
+uniform gate by copy-paste. `needs`/`draft == false` were removed from
+`t0-auto-merge`'s `if:`; `reviewer clean`'s gating is unchanged. If the
+ENABLE half of `t0-auto-merge.js` should still wait on the deterministic
+checks, that belongs inside the script (it can read check-run states itself),
+not in the workflow `if:`, which cannot distinguish enable from revoke.
+
 ### D20 — Branch protection = required status checks
 `main` is protected by required STATUS CHECKS (CI, `forge validators`,
 `reviewer clean`), not required approvals: the coordinator never approves.

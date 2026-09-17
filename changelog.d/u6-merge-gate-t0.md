@@ -24,14 +24,19 @@ section: Fixed
 - Draft PRs are handled rather than erroring. GitHub refuses auto-merge on a
   draft, and forge's own `pr-create` guard requires `--draft`, so every
   agent-opened PR would have reddened this job on its `opened` event. Known
-  gap, deliberately left: a T0 PR marked ready with no further push does not
-  re-run the job. Listening for `ready_for_review` on the shared trigger was
-  tried and reverted — skipping the other jobs on that event replaced their
-  real check runs with `skipped` ones, which branch protection counts as
-  passing, so a draft that went red could be marked ready and auto-merge.
-  The correct shape (the T0 job in its own workflow on `pull_request_target`,
-  which needs no PR checkout and so also stops a PR editing the workflow that
-  judges it) is recorded in D19 as its own unit.
+  gap, deliberately left at the time: a T0 PR marked ready with no further
+  push does not re-run the job. Listening for `ready_for_review` on the
+  shared trigger was tried and reverted — skipping the other jobs on that
+  event replaced their real check runs with `skipped` ones, which branch
+  protection counts as passing, so a draft that went red could be marked
+  ready and auto-merge. **Superseded by `ci-fail-fast-vps` (changelog.d/
+  ci-fail-fast-vps.md) and D19's 2026-09-17 revision in `docs/decisions.md`:**
+  every job now carries its own `draft == false` gate instead of the trigger
+  itself skipping drafts, so `ready_for_review` was added to the shared
+  trigger's `types:` without the "skipped counts as passing" hazard this
+  bullet describes, and marking a PR ready now re-runs this job. The
+  `pull_request_target` follow-up (a PR editing the workflow file that judges
+  it) remains open and is still tracked under D19.
 - The comment-failure path revokes its own grant unconditionally. It is the
   one caller that knows the grant is this run's, yet it routed through
   attribution — so an unverified `enabledBy` login, a missing one, or a
