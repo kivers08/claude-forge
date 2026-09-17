@@ -9,6 +9,10 @@
 // will call crypto.randomUUID() ONLY when a caller explicitly asks newId() for
 // an id and supplies none — crypto.randomUUID() is called out as allowed in the
 // dispatch. Callers inside hooks should still pass their own id/now.
+// crypto.randomUUID() is also used internally by writeRecord for the
+// TRANSIENT `.tmp-<uuid>` atomic-write filename (see writeRecord): that name
+// never reaches a record's own bytes or its final on-disk filename, so it is
+// determinism-neutral — it cannot make a hook's fingerprinted OUTPUT vary.
 //
 // Canonical store (D28.1, §3.1): committed markdown, one file per record, under
 //   .claude/agent-memory/<plugin>-<agent>/
@@ -148,7 +152,7 @@ function scrubSecrets(input) {
 
 function parseScalar(raw) {
   const v = raw.trim();
-  if (v === '' ) return '';
+  if (v === '') return '';
   if (v === 'null' || v === '~') return null;
   if (v === 'true') return true;
   if (v === 'false') return false;
@@ -264,7 +268,13 @@ function parseRecord(raw) {
   const frontmatter = {};
   const extra = {};
   let lastKey = null;
-  let lastBucket = null; // one of: frontmatter (top-level scalar), extra, or 'metadata'
+  // Explicit three-way tag for which bucket the LAST top-level key landed in,
+  // so the dispatch below routes an indented continuation line unambiguously.
+  // (Previously this mixed an object identity — the `frontmatter`/`extra`
+  // object itself — with the string 'metadata' as a third case; three
+  // parallel string tags read the same at every call site and keep the
+  // three-way switch explicit rather than relying on reference equality.)
+  let lastBucket = null; // one of: 'top', 'extra', 'metadata'
   let metadata = null; // becomes an object once a `metadata:` header is seen
   for (let i = 1; i < close; i++) {
     const line = lines[i];
@@ -286,7 +296,7 @@ function parseRecord(raw) {
         if (cm) metadata[cm[1]] = parseScalar(cm[2]);
         continue;
       }
-      if (lastKey !== null && lastBucket === extra) {
+      if (lastKey !== null && lastBucket === 'extra') {
         extra[lastKey] = (extra[lastKey] === null ? '' : extra[lastKey])
           + '\n' + line;
         continue;
@@ -312,10 +322,10 @@ function parseRecord(raw) {
     const val = parseScalar(rawVal);
     if (TOP_LEVEL_ORDER.includes(key)) {
       frontmatter[key] = val;
-      lastBucket = frontmatter;
+      lastBucket = 'top';
     } else {
       extra[key] = val;
-      lastBucket = extra;
+      lastBucket = 'extra';
     }
     lastKey = key;
   }
@@ -336,15 +346,27 @@ function serializeRecord(record) {
   const out = ['---'];
   for (const key of TOP_LEVEL_ORDER) {
     if (Object.prototype.hasOwnProperty.call(fm, key)) {
+      // verbatimOk defaults false: name/description are typed top-level
+      // scalars, never the parseRecord-produced verbatim-block shape (see
+      // serializeField) — a multiline value here always falls through to the
+      // quoted single-line scalar path.
       out.push(serializeField(key, fm[key]));
     }
   }
   if (fm.metadata && typeof fm.metadata === 'object' && !Array.isArray(fm.metadata)) {
+    // Same: metadata's OWN header line is a nested-map value (object), not a
+    // multiline string, so verbatimOk is irrelevant here; the flag matters for
+    // metadata's own CHILD values, which serializeField's map branch renders
+    // with serializeScalar directly (never the verbatim-block path) — see
+    // serializeField's map branch.
     out.push(serializeField('metadata', fm.metadata));
   }
   for (const key of Object.keys(extra)) {
     if (key === 'metadata' || TOP_LEVEL_ORDER.includes(key)) continue; // never duplicate a schema key
-    out.push(serializeField(key, extra[key]));
+    // Only `extra` values may legitimately carry the parseRecord-produced
+    // verbatim indented-block shape (migration losslessness) — see
+    // serializeField and isSafeVerbatimBlock.
+    out.push(serializeField(key, extra[key], { verbatimOk: true }));
   }
   out.push('---');
   const body = record.body == null ? '' : String(record.body);
@@ -379,26 +401,39 @@ function isSafeVerbatimBlock(rest) {
 // fields are always scalar):
 //   * a multiline STRING that is PROVABLY the verbatim indented-block shape
 //     parseRecord's continuation branch produces (migration's `metadata:` +
-//     children) — preserved verbatim as an indented block;
-//   * any OTHER multiline string — emitted as a single-line double-quoted
-//     scalar (serializeScalar escapes \n/\r), since it did not come from
-//     parseRecord and cannot be trusted to already be safely indented/fenced;
+//     children) — preserved verbatim as an indented block. Gated behind
+//     `verbatimOk` (opt-in, default false): ONLY the `extra` serialization
+//     loop in serializeRecord passes `verbatimOk: true`, because only an
+//     `extra` value can legitimately have come from parseRecord's own
+//     continuation-line capture. A top-level `name`/`description` (or a
+//     `metadata` sub-value) is never that shape — treating a caller-supplied
+//     multiline value there as a verbatim block would let an INDENTED
+//     continuation line (e.g. `  id: evil` or `  ---`) reach the file, which
+//     parseRecord's typed-top-level-key branch then silently discards on
+//     re-parse (invalid frontmatter, data loss) rather than round-tripping;
+//   * any OTHER multiline string (or any multiline string when verbatimOk is
+//     false) — emitted as a single-line double-quoted scalar (serializeScalar
+//     escapes \n/\r), since it cannot be trusted to already be safely
+//     indented/fenced;
 //   * a nested MAP (one level) — emitted as the `key:` header + `  child: val`
 //     lines, exactly the block form parseRecord round-trips back into a string;
 //   * an ARRAY — emitted as `key:` + `  - item` lines (YAML block sequence).
 // Objects/arrays must NEVER fall through to serializeScalar (String(obj) is
 // `[object Object]`, String(arr) drops structure) — that silently loses data.
-function serializeField(key, value) {
+function serializeField(key, value, { verbatimOk = false } = {}) {
   if (typeof value === 'string' && value.includes('\n')) {
-    const [head, ...rest] = value.split('\n');
-    if (isSafeVerbatimBlock(rest)) {
-      // Multiline preserved block: first physical line is this key's own
-      // value, the rest are already-indented child lines captured on parse.
-      const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
-      return [headOut, ...rest].join('\n');
+    if (verbatimOk) {
+      const [head, ...rest] = value.split('\n');
+      if (isSafeVerbatimBlock(rest)) {
+        // Multiline preserved block: first physical line is this key's own
+        // value, the rest are already-indented child lines captured on parse.
+        const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
+        return [headOut, ...rest].join('\n');
+      }
     }
-    // Not provably safe: fall back to a single-line quoted scalar so the
-    // value can never smuggle a frontmatter key or an early `---` fence.
+    // Not opted in, or not provably safe: fall back to a single-line quoted
+    // scalar so the value can never smuggle a frontmatter key or an early
+    // `---` fence.
     return `${key}: ${serializeScalar(value)}`;
   }
   if (Array.isArray(value)) {
@@ -468,6 +503,20 @@ function validateFrontmatter(fm) {
       || /^-?\d+$/.test(String(md.uses));
     if (!isIntShape || !Number.isInteger(Number(md.uses)) || Number(md.uses) < 0) {
       problems.push('metadata.uses must be a non-negative integer');
+    }
+  }
+  // The schema's "bounded one-level nesting" (§3.2) means every metadata
+  // sub-value must itself be a scalar. serializeField's map branch renders
+  // each child with serializeScalar (see above), which silently degrades a
+  // non-scalar to `[object Object]` (an object) or a comma-joined string (an
+  // array) — a mangled, unrecoverable value on disk rather than a thrown
+  // error. Catch it here, at the one place the rest of this schema is
+  // enforced, so writeRecord refuses before that ever reaches a file.
+  for (const k of Object.keys(md)) {
+    const v = md[k];
+    const isScalar = v === null || ['string', 'number', 'boolean'].includes(typeof v);
+    if (!isScalar) {
+      problems.push(`metadata.${k} must be a scalar (got ${Array.isArray(v) ? 'array' : typeof v})`);
     }
   }
   return problems;
@@ -604,6 +653,22 @@ function readScope(root, plugin, scope) {
 // would otherwise both resolve to `x.md.md` / `x.md`, an aliasing hazard).
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
+// The same key charset parseRecord's key-line regex accepts (`/^([A-Za-z0-9_-]+):/`
+// for a top-level line, `/^\s+([A-Za-z0-9_-]+):/` for an indented metadata
+// child). writeRecord validates every `extra`/`metadata` KEY against this
+// before serializing — see isSafeKey's callers — because a key containing
+// `\n`, `:`, or `---` would let serializeField emit a forged sibling
+// frontmatter line (e.g. an `extra` key `'x\nmetadata'` producing a bare
+// `metadata:` line that RE-OPENS the metadata block on re-parse, or a key
+// `'x\n---\nplanted'` that plants an early closing fence). Values are already
+// injection-safe (serializeScalar escapes \n/\r, or the verbatim-block path is
+// now extra-only and provably safe — see isSafeVerbatimBlock); keys were not.
+const SAFE_KEY_RE = /^[A-Za-z0-9_-]+$/;
+
+function isSafeKey(k) {
+  return SAFE_KEY_RE.test(String(k));
+}
+
 function isSafeId(id) {
   const s = String(id);
   if (!SAFE_ID_RE.test(s)) return false;
@@ -727,6 +792,24 @@ function writeRecord(opts) {
     }
   }
   const scrubbedExtra = scrubValueDeep(opts.extra || {}, redactions);
+
+  // Reject a caller-supplied KEY that could forge frontmatter on re-parse
+  // (see isSafeKey/SAFE_KEY_RE above) BEFORE anything is serialized. Values
+  // are already injection-safe; keys were not — a `metadata` or `extra` key
+  // containing `\n`/`:`/`---` would let serializeField emit a bare sibling
+  // line (e.g. `metadata:`) that re-parses as a forged block, or an early
+  // closing fence. Checked on both `md` (metadata, including any unknown
+  // sub-key) and `extra` (top-level unknown keys).
+  for (const k of Object.keys(md)) {
+    if (!isSafeKey(k)) {
+      throw new Error(`writeRecord: invalid metadata key (must match ${SAFE_KEY_RE}): ${JSON.stringify(k)}`);
+    }
+  }
+  for (const k of Object.keys(scrubbedExtra)) {
+    if (!isSafeKey(k)) {
+      throw new Error(`writeRecord: invalid extra key (must match ${SAFE_KEY_RE}): ${JSON.stringify(k)}`);
+    }
+  }
 
   const fm = { name, description, metadata: md };
   const problems = validateFrontmatter(fm);

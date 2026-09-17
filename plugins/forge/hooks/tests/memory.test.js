@@ -1141,5 +1141,167 @@ t('validateFrontmatter rejects a negative uses count', () => {
   assert.deepStrictEqual(mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', uses: 3 } }), []);
 });
 
+// --- forge:reviewer finding (SECURITY, post-reshape fix 1): unvalidated
+// extra/metadata KEYS enable frontmatter injection -------------------------
+
+t('writeRecord throws on an extra key containing a newline that would forge a metadata: line, and writes nothing', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd', metadata: { id: 'key-inj-1', type: 'feedback', scope: 'reviewer' },
+    body: 'x',
+    extra: { 'x\nmetadata': '' },
+    now: '2026-09-16T00:00:00.000Z',
+  }), /writeRecord: invalid extra key/);
+  assert.deepStrictEqual(fs.readdirSync(root), []);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord throws on an extra key containing a --- fence, and writes nothing', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd', metadata: { id: 'key-inj-2', type: 'feedback', scope: 'reviewer' },
+    body: 'x',
+    extra: { 'x\n---\nplanted': 'y' },
+    now: '2026-09-16T00:00:00.000Z',
+  }), /writeRecord: invalid extra key/);
+  assert.deepStrictEqual(fs.readdirSync(root), []);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord throws on a metadata key containing a newline/colon, and writes nothing', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd',
+    metadata: { id: 'key-inj-3', type: 'feedback', scope: 'reviewer', 'x\ny: z': 'v' },
+    body: 'x',
+    now: '2026-09-16T00:00:00.000Z',
+  }), /writeRecord: invalid metadata key/);
+  assert.deepStrictEqual(fs.readdirSync(root), []);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord still succeeds with normal extra/metadata keys (regression)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd',
+    metadata: { id: 'key-ok-1', type: 'feedback', scope: 'reviewer', level: 3 },
+    body: 'x',
+    extra: { note: 'fine' },
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  assert.ok(fs.existsSync(res.file));
+  const parsed = mem.parseRecord(fs.readFileSync(res.file, 'utf8'));
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'key-ok-1');
+  assert.strictEqual(parsed.frontmatter.metadata.level, 3);
+  assert.strictEqual(parsed.extra.note, 'fine');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// --- forge:reviewer finding (BUG, post-reshape fix 2): verbatim-block path
+// wrongly applies to name/description -------------------------------------
+
+t('a name with an indented continuation line containing id: evil round-trips as an escaped scalar, not a verbatim block', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n\n  id: evil', description: 'd',
+    metadata: { id: 'verb-1', type: 'feedback', scope: 'reviewer' },
+    body: 'x',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.malformed, false, onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'verb-1', onDisk);
+  assert.strictEqual(parsed.frontmatter.name, 'n\n  id: evil', onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a description with an indented continuation line containing --- round-trips as an escaped scalar, not a verbatim block', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd\n  ---',
+    metadata: { id: 'verb-2', type: 'feedback', scope: 'reviewer' },
+    body: 'original body must survive',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.malformed, false, onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'verb-2', onDisk);
+  assert.strictEqual(parsed.frontmatter.description, 'd\n  ---', onDisk);
+  assert.ok(parsed.body.includes('original body must survive'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('serializeField without verbatimOk always falls through to a quoted scalar for a multiline value', () => {
+  const out = mem.serializeRecord({
+    frontmatter: { name: 'n\n  weird: line', description: 'd' },
+    extra: {},
+    body: '',
+  });
+  const parsed = mem.parseRecord(out);
+  assert.strictEqual(parsed.frontmatter.name, 'n\n  weird: line', out);
+  assert.ok(!/^weird:/m.test(out), out);
+});
+
+t('the existing extra-block round-trip test still passes (verbatimOk extra-only regression)', () => {
+  const src = [
+    '---',
+    'name: safe-block-2',
+    'description: d',
+    'metadata:',
+    '  type: feedback',
+    '  scope: reviewer',
+    '  id: safe-block-2',
+    'legacyNote: head line',
+    '  child: value',
+    '---',
+    '',
+    'body here',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  assert.strictEqual(parsed.extra.legacyNote, 'head line\n  child: value', JSON.stringify(parsed.extra));
+  const out = mem.serializeRecord(parsed);
+  assert.strictEqual(out, src, `round-trip mismatch:\n---got---\n${out}\n---want---\n${src}`);
+});
+
+// --- forge:reviewer finding (BUG, post-reshape fix 3): non-scalar metadata
+// sub-values degrade silently -----------------------------------------------
+
+t('validateFrontmatter rejects a metadata sub-value that is an object', () => {
+  const problems = mem.validateFrontmatter({
+    name: 'n', description: 'd',
+    metadata: { id: 'x', type: 'feedback', scope: 's', bad: { nested: true } },
+  });
+  assert.ok(problems.some((p) => /metadata\.bad must be a scalar/.test(p)), problems.join(';'));
+});
+
+t('validateFrontmatter rejects a metadata sub-value that is an array', () => {
+  const problems = mem.validateFrontmatter({
+    name: 'n', description: 'd',
+    metadata: { id: 'x', type: 'feedback', scope: 's', bad: [1, 2, 3] },
+  });
+  assert.ok(problems.some((p) => /metadata\.bad must be a scalar/.test(p)), problems.join(';'));
+});
+
+t('writeRecord throws when a metadata sub-value is a non-scalar object/array, and writes nothing', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd',
+    metadata: { id: 'nonscalar-1', type: 'feedback', scope: 'reviewer', bad: { nested: true } },
+    body: 'x',
+    now: '2026-09-16T00:00:00.000Z',
+  }), /metadata\.bad must be a scalar/);
+  assert.deepStrictEqual(fs.readdirSync(root), []);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);
