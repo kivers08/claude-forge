@@ -175,6 +175,83 @@ merges**, so Wave 2 builds on the final schema.
 
 ---
 
+## D28.4 — Re-scope: thin safety/visibility layer over NATIVE subagent memory (SETTLED 2026-09-17)
+
+Owner-confirmed. This is the biggest course change in the epic and it **supersedes
+the "build a storage subsystem" framing** in §1/§3/§7 below.
+
+**Why.** Claude Code shipped native subagent memory (`memory: <scope>`, v2.1.33)
+and Auto Dream consolidation (v2.1.59). We verified on this machine
+(v2.1.197) — from the shipped binary's own strings **and** files already on disk
+in this repo — that native:
+- writes to **`.claude/agent-memory/<plugin>-<agent>/`** (project scope,
+  git-committed; `user` → `~/.claude/…`; `local` → `.claude/agent-memory-local/`,
+  auto-gitignored) — i.e. **exactly D28's `<plugin>-<agent>` path**;
+- uses **`MEMORY.md` link-index (hub) + `<type>_<slug>.md` topic files (spokes)** —
+  our hub-and-spoke, verbatim;
+- uses the **D28.3 record format**: `name`/`description` top-level, `type` under
+  `metadata:`, body with **Why:**/**How to apply:**, `[[wikilinks]]` — the
+  nesting D28.3 chose is what native actually writes;
+- **auto-captures** lessons (Auto Memory, on by default) and **auto-consolidates**
+  (Auto Dream: dedup, contradiction resolution, size-prune of `MEMORY.md`).
+
+The `.claude/agent-memory/forge-reviewer|implementer|bug-fixer/` records in this
+repo are **native-captured**, not hand-authored — Auto Memory has been running on
+forge's agents already. D28.3 turned out to be byte-compatible with native.
+
+**Decision.** **Adopt native as the substrate. Stop building a parallel storage
+engine.** forge builds ONLY the layer native lacks. Concretely:
+
+- **BUILD (forge value native does not provide):**
+  1. **Redaction-on-write** — a hook (PreToolUse/PostToolUse) that scrubs
+     secrets/PII from any write under `.claude/agent-memory/**`. Native does *no*
+     redaction; a native reviewer memory in this repo literally documents a scrub
+     gap. This replaces Unit 1's scrubber, delivered as a hook not a library.
+  2. **Reviewer safety** — reviewer memory read from the **base ref**, and the
+     reviewer **excluded from untrusted auto-inject** (native auto-inject would
+     otherwise let a PR plant a lesson that steers its own review). Was Unit 4;
+     now the **highest-value** piece. Extends `reviewer-clean-check.js`.
+  3. **Adoption migration** — convert a consumer repo's *differently-shaped*
+     prior memory into the native format (target = native's format, so simpler
+     than before). Explicit, non-destructive, archive-originals (D28.2 stands).
+  4. **(Optional) visible/ranked recall** — BM25 + attributable injection over
+     native's silent, unranked auto-load. Deferred; only if the silent default
+     proves insufficient. This is the ONLY thing that would revive D28.1's
+     `node:sqlite`/Node-floor amendment — otherwise that amendment is moot.
+
+- **DROP (native or Auto Dream now covers it):**
+  - the hand-rolled storage/parser/serializer (**Unit 1 `lib/memory.js`**) —
+    **superseded; PR #7 / `claude/mv2-u1-record-schema` is NOT merged**;
+  - our own pruning/consolidation/auditor (Auto Dream does dedup + contradiction
+    + size-prune);
+  - **Unit 6** earned-usefulness measurement (deferred — highest cost, and
+    Anthropic's investment is going to consolidation, not measurement).
+
+**What still holds:** D28.3 (the record format — it *is* native's). D28.2
+(adoption migration + archive-originals). The security posture in §4 (memory is a
+reviewable, gated instruction surface) — now enforced via the reviewer-safety
+hook rather than a custom read path.
+
+**New unit breakdown (replaces §7):**
+1. **Redaction-on-write hook** (T1, security) — scrub `.claude/agent-memory/**`
+   writes; tests with a poisoned-secret fixture.
+2. **Reviewer safety** (T1, security) — base-ref memory read + reviewer
+   auto-inject exclusion in `reviewer-clean-check.js`; the instruction-surface
+   gate. *(Independent; can land first.)*
+3. **Agent memory config** (T2) — set `memory: project` on the worker agents that
+   benefit, reviewer handled specially; document each agent's scope.
+4. **Adoption migration** (T1, D28.2) — `bootstrap` + `forge memory migrate` for a
+   consumer repo whose prior memory is in a non-native shape; fixture-guarded.
+5. **(Optional, deferred) visible/ranked recall** (T2) — BM25 + attributable
+   injection; only if native's silent auto-load proves insufficient.
+
+**Consequence for in-flight work:** the storage-engine branches
+(`claude/mv2-u1-record-schema`, PR #7) are superseded. Salvageable pieces: the
+redaction scrubber (`scrubSecrets`/`scrubValueDeep`) and its tests migrate into
+unit 1's hook; the rest is retired.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
@@ -358,6 +435,13 @@ Cite the docs or test on a scratch project — do not guess.
 ---
 
 ## 7. Unit breakdown (each = one PR off `claude/units`, forge convention)
+
+> **SUPERSEDED by D28.4 (2026-09-17).** The unit list below reflects the original
+> "build a storage subsystem" plan. The active plan is the thin-layer unit
+> breakdown in **D28.4** (redaction hook, reviewer safety, agent config, adoption
+> migration, optional recall). Units 1/2/6 and the pruning/consolidation work here
+> are retired because native subagent memory + Auto Dream provide them. Kept for
+> history.
 
 1. **Record schema + `lib/memory.js`** (T1) — read/write committed records,
    redaction scrubber, migration of existing `.claude/agent-memory/**`. Tests.
