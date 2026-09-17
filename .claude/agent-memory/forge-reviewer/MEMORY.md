@@ -1,1 +1,2 @@
 - [hasUnquotedSequence quoting bypass](security_hasUnquotedSequence_bypass.md) — a single quoted word (e.g. `gh "pr" merge`) defeats merge-gate and any guard built on this helper; pre-existing, repo-wide.
+- [writeRecord extra unscrubbed](security_writeRecord_extra_unscrubbed.md) — memory-v2 writeRecord scrubs body+frontmatter but not opts.extra; secrets in extra fields reach disk.
