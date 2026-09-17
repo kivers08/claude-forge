@@ -16,6 +16,7 @@ const {
   verifyDiffResolvedAck,
   matchesInstructionSurface,
   capText,
+  computeAndWriteDiff,
 } = require('../reviewer-clean-check.js');
 
 const BASE = '3e5422e9955e3af53f55d889e4f3932f454bde16';
@@ -407,6 +408,89 @@ test('fails closed (returns {error}) when a listed file\'s blob cannot be read v
   const result = callInFixture(root);
   assert.strictEqual(typeof result.error, 'string', 'a missing blob must be a fault, not a silent partial result');
   assert.strictEqual(result.text, undefined);
+});
+
+console.log('computeAndWriteDiff (symlink-safe write — reviewer-safety FIX 1):');
+
+// computeAndWriteDiff reads ROOT/DIFF_FILE from module-level constants derived
+// from FORGE_REPO_ROOT at require time (see the top of reviewer-clean-check.js),
+// so — like readReviewerMemoryFromBase above — each case here must run in a
+// subprocess rooted at a throwaway repo rather than calling the already-
+// required in-process function against this repo's own ROOT.
+function tmpDiffRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-reviewer-diff-'));
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+    return r;
+  };
+  git('init', '-q');
+  git('config', 'user.email', 't@t.com');
+  git('config', 'user.name', 't');
+  fs.writeFileSync(path.join(root, 'README.md'), 'base\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  fs.writeFileSync(path.join(root, 'README.md'), 'head\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'head');
+  return { root, git };
+}
+
+// Runs computeAndWriteDiff('main', <baseSha>, <headSha>) in a subprocess
+// rooted at `root`, after optionally planting a symlink at DIFF_FILE's path
+// pointing at `target`. Returns { wroteDiffFile, targetContent, error }.
+function callComputeAndWriteDiff(root, target) {
+  const script = [
+    "const path = require('path');",
+    "const fs = require('fs');",
+    "const { computeAndWriteDiff } = require(process.env.MODULE_PATH);",
+    "const { spawnSync } = require('child_process');",
+    "const sh = (...a) => spawnSync('git', a, { cwd: process.cwd(), encoding: 'utf8' });",
+    "const baseSha = sh('rev-parse', 'origin/main').stdout.trim();",
+    "const headSha = sh('rev-parse', 'HEAD').stdout.trim();",
+    "let error = null;",
+    "try { computeAndWriteDiff('main', baseSha, headSha); } catch (e) { error = e.message; }",
+    "const diffFile = path.join(process.cwd(), '.reviewer-clean-diff.txt');",
+    "process.stdout.write(JSON.stringify({",
+    "  error,",
+    "  diffIsSymlink: fs.lstatSync(diffFile, { throwIfNoEntry: false })?.isSymbolicLink() || false,",
+    "  diffContent: fs.existsSync(diffFile) ? fs.readFileSync(diffFile, 'utf8') : null,",
+    "}));",
+  ].join('\n');
+  const r = spawnSync('node', ['-e', script], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, FORGE_REPO_ROOT: root, MODULE_PATH: path.resolve(__dirname, '../reviewer-clean-check.js') },
+  });
+  if (r.status !== 0) throw new Error(`fixture subprocess failed: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+test('writes the diff file normally when no symlink is present', () => {
+  const { root } = tmpDiffRepo();
+  const result = callComputeAndWriteDiff(root);
+  assert.strictEqual(result.error, null);
+  assert.strictEqual(result.diffIsSymlink, false);
+  assert.ok(result.diffContent.includes('README.md'), 'diff content should mention the changed file');
+});
+
+test('a symlink planted at DIFF_FILE\'s path is unlinked, not followed (reviewer-safety FIX 1)', () => {
+  const { root } = tmpDiffRepo();
+  const outside = path.join(root, '..', `forge-reviewer-diff-target-${process.pid}`);
+  fs.writeFileSync(outside, 'PRE-EXISTING-SENTINEL-CONTENT\n');
+  const diffFilePath = path.join(root, '.reviewer-clean-diff.txt');
+  fs.symlinkSync(outside, diffFilePath);
+
+  const result = callComputeAndWriteDiff(root);
+  assert.strictEqual(result.error, null);
+  assert.strictEqual(result.diffIsSymlink, false, 'DIFF_FILE must be a real file after the write, not the symlink');
+  assert.ok(result.diffContent.includes('README.md'), 'the real diff content must have been written');
+
+  // The symlink's target must be untouched — proof the write never followed it.
+  const targetContent = fs.readFileSync(outside, 'utf8');
+  assert.strictEqual(targetContent, 'PRE-EXISTING-SENTINEL-CONTENT\n', 'symlink target must not have been clobbered');
+  fs.unlinkSync(outside);
 });
 
 if (failures > 0) {

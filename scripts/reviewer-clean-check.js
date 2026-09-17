@@ -473,7 +473,15 @@ function computeAndWriteDiff(base, baseSha, headSha) {
     '--- git diff (full body) ---',
     diffBody,
   ].join('\n');
-  fs.writeFileSync(DIFF_FILE, content, 'utf8');
+  // Symlink-safe write: a PR could commit a symlink at DIFF_FILE's path
+  // pointing anywhere on the runner's filesystem, and a plain writeFileSync
+  // follows it (clobbering the symlink's target with attacker-influenced diff
+  // content — the worse of the two files here, since the body is the diff
+  // itself). rmSync unlinks a symlink without touching what it points to;
+  // 'wx' (O_CREAT|O_EXCL) then refuses to open through a link that reappears
+  // in the tiny window between the rm and the open, closing the TOCTOU gap.
+  fs.rmSync(DIFF_FILE, { force: true });
+  fs.writeFileSync(DIFF_FILE, content, { encoding: 'utf8', flag: 'wx' });
   // Returned separately, not as one collapsed label, because they mean
   // different things: losing the tail of the BODY means the reviewer never
   // saw part of the change set, while losing the tail of the --stat table
@@ -637,19 +645,27 @@ async function main() {
   }
   // Written even when empty (reviewerMemory === ''), so the prompt below can
   // always point at a real file rather than branching its wording on whether
-  // memory exists yet. The catch below explicitly unlinks DIFF_FILE too: the
-  // spawnSync finally block further down only runs once the child process is
-  // actually launched, so a throw here (e.g. disk full) would otherwise
-  // process.exit(1) past it and leave DIFF_FILE — already written above —
-  // orphaned in the working tree. memoryFileWritten is only set true on a
-  // successful write, so MEMORY_FILE is never double-unlinked by the later
-  // block (it was never created on this path).
+  // memory exists yet. Symlink-safe for the same reason as DIFF_FILE above
+  // (rmSync + 'wx'): a PR could commit a symlink at this path too. The catch
+  // below explicitly unlinks DIFF_FILE and MEMORY_FILE both: the spawnSync
+  // finally block further down only runs once the child process is actually
+  // launched, so a throw here (e.g. disk full, or the rmSync itself failing
+  // on a non-symlink obstruction) would otherwise process.exit(1) past it and
+  // leave DIFF_FILE — already written above — orphaned in the working tree.
+  // MEMORY_FILE gets the same unconditional best-effort unlink rather than
+  // one gated on memoryFileWritten: the rmSync above may already have
+  // partially cleared a prior symlink, or the writeFileSync may have thrown
+  // after creating a zero-byte file, so there is no reliable "definitely
+  // nothing to remove" case here — an unlink of a file that never existed is
+  // just an ignored ENOENT, same as DIFF_FILE's.
   try {
-    fs.writeFileSync(MEMORY_FILE, reviewerMemory, 'utf8');
+    fs.rmSync(MEMORY_FILE, { force: true });
+    fs.writeFileSync(MEMORY_FILE, reviewerMemory, { encoding: 'utf8', flag: 'wx' });
     memoryFileWritten = true;
   } catch (e) {
     log(`could not write reviewer memory file: ${e.message}`);
     try { fs.unlinkSync(DIFF_FILE); } catch (e2) { /* already gone */ }
+    try { fs.unlinkSync(MEMORY_FILE); } catch (e3) { /* already gone */ }
     await postStatus('failure', 'reviewer clean: could not write reviewer memory file');
     process.exit(1);
   }
