@@ -1,4 +1,14 @@
 ---
+id: 67d82173-d2b7-42d1-9f26-fe7d7bb9961a
+type: lesson
+scope: bug-fixer
+tier: semantic
+importance: 0.5
+created: "2026-09-17T01:17:45.811Z"
+lastUsed: null
+uses: 0
+source: authored
+supersedes: null
 name: headless-reviewer-git-commentary
 description: A headless `claude -p` reviewer child can end its response with git-hygiene commentary instead of its report, silently discarding the real findings from --output-format json's `result` field — observed twice in claude-forge's reviewer-clean-check.js end-to-end testing.
 metadata:

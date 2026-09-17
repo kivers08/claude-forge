@@ -40,6 +40,8 @@ jobs:
         run: node plugins/forge/hooks/tests/run.js
       - name: Tier resolver unit tests (D17)
         run: node plugins/forge/hooks/tests/tier.test.js
+      - name: memory-v2 record library unit tests (D28)
+        run: node plugins/forge/hooks/tests/memory.test.js
       - name: Hook unit runs (smoke)
         run: test -d plugins/smoke && node plugins/forge/hooks/tests/run.js --plugin plugins/smoke || echo "no smoke plugin"
       - name: Project SessionStart hook unit tests

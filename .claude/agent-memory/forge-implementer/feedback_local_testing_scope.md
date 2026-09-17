@@ -1,4 +1,14 @@
 ---
+id: cd54e2bd-f1c2-40be-b064-15456157a690
+type: lesson
+scope: implementer
+tier: semantic
+importance: 0.5
+created: "2026-09-17T01:17:45.812Z"
+lastUsed: null
+uses: 0
+source: authored
+supersedes: null
 name: feedback-local-testing-scope
 description: In claude-forge, run only scoped tests locally against touched files — full CI suites belong on the CI runner, not the implementer's own session.
 metadata:

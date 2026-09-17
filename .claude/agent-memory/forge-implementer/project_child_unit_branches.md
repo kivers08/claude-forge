@@ -1,4 +1,14 @@
 ---
+id: fb08a39a-dc99-4f3c-bc5c-59880f4b74b9
+type: note
+scope: implementer
+tier: semantic
+importance: 0.5
+created: "2026-09-17T01:17:45.812Z"
+lastUsed: null
+uses: 0
+source: authored
+supersedes: null
 name: project-child-unit-branches
 description: claude-forge uses stacked integration branches for units — a unit branch's PR targets the parent unit branch, not main.
 metadata:

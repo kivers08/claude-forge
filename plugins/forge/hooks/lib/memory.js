@@ -1,0 +1,486 @@
+'use strict';
+// forge memory-v2 record library (D28, docs/plans/memory-v2.md unit 1).
+//
+// Node stdlib ONLY (D11): no npm deps. Pure library — it takes `now` and `id`
+// from its caller so a hook can supply values safely. The plan (§3.2) is
+// explicit that ids/timestamps must NOT come from Date.now()/Math.random()
+// *inside a hook*; a hook is fingerprinted for determinism and non-determinism
+// there is a smell. This module never calls Date.now() or Math.random(). It
+// will call crypto.randomUUID() ONLY when a caller explicitly asks newId() for
+// an id and supplies none — crypto.randomUUID() is called out as allowed in the
+// dispatch. Callers inside hooks should still pass their own id/now.
+//
+// Canonical store (D28.1, §3.1): committed markdown, one file per record, under
+//   .claude/agent-memory/<plugin>-<agent>/
+// Per-agent scope (D4) is load-bearing: a reviewer record must never be read as
+// an implementer record. readScope() reads exactly one agent directory and
+// never crosses into a sibling scope.
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// ---------------------------------------------------------------------------
+// Schema (docs/plans/memory-v2.md §3.2)
+// ---------------------------------------------------------------------------
+
+// The SMALL type set. Adding a type is cheap, removing one is not (§3.2), so it
+// stays tight until a concrete need. Anything outside this set is invalid.
+const TYPES = ['fact', 'lesson', 'decision', 'note'];
+
+// Known agent scopes (§3.2). An unknown scope is not rejected by the parser
+// (it fails open — see parseRecord), but writeRecord requires a caller-supplied
+// scope and the frontmatter carries whatever is passed. This list is the set
+// the recall pipeline (unit 3) will treat as first-class; kept here as the one
+// authoritative copy.
+const SCOPES = [
+  'reviewer', 'implementer', 'bug-fixer', 'test-writer',
+  'doc-updater', 'explorer', 'coordinator',
+];
+
+const TIERS = ['working', 'episodic', 'semantic'];
+const SOURCES = ['authored', 'learning-block', 'ambient'];
+
+// Frontmatter fields in canonical serialization order. Kept explicit so a
+// round-trip is stable and diffs stay minimal.
+const FIELD_ORDER = [
+  'id', 'type', 'scope', 'tier', 'importance',
+  'created', 'lastUsed', 'uses', 'source', 'supersedes',
+];
+
+// ---------------------------------------------------------------------------
+// Redaction scrubber (§4)
+// ---------------------------------------------------------------------------
+//
+// A stdlib pattern safety-net, NOT a guarantee. A bare high-entropy string with
+// no recognizable prefix/shape can slip through — this is documented honestly
+// wherever a redacted record is written (see REDACTION_CAVEAT) and in the plan.
+// The scrubber runs on every write path before bytes touch disk.
+//
+// Each entry: { kind, re } where `re` has a capture group for any leading
+// keyword/prefix we want to preserve so the record stays readable.
+const REDACTION_PATTERNS = [
+  // PEM private key blocks (RSA/EC/OPENSSH/generic). Multiline.
+  {
+    kind: 'pem',
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g,
+    replace: () => '[REDACTED:pem]',
+  },
+  // AWS access key id.
+  {
+    kind: 'aws-access-key',
+    re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+    replace: () => '[REDACTED:aws-access-key]',
+  },
+  // GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_).
+  {
+    kind: 'github-token',
+    re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
+    replace: () => '[REDACTED:github-token]',
+  },
+  // Slack tokens.
+  {
+    kind: 'slack-token',
+    re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+    replace: () => '[REDACTED:slack-token]',
+  },
+  // OpenAI / Anthropic-style keys (sk-..., sk-ant-...).
+  {
+    kind: 'api-key',
+    re: /\b(?:sk|pk)-(?:ant-)?[A-Za-z0-9_-]{20,}\b/g,
+    replace: () => '[REDACTED:api-key]',
+  },
+  // Bearer tokens in an Authorization value.
+  {
+    kind: 'bearer-token',
+    re: /\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*/g,
+    replace: () => 'Bearer [REDACTED:bearer-token]',
+  },
+  // *_SECRET= / *_TOKEN= / *_KEY= / *_PASSWORD= assignment forms. The keyword
+  // (the LHS + `=`) is preserved so the record still reads sensibly; only the
+  // value is scrubbed.
+  {
+    kind: 'secret-assignment',
+    re: /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)("?)([^\s"']{6,})\2/gi,
+    replace: (m, kw) => `${kw}[REDACTED:secret-assignment]`,
+  },
+];
+
+const REDACTION_CAVEAT =
+  'Redaction is a stdlib pattern safety-net, not a guarantee: a bare ' +
+  'high-entropy string with no recognizable prefix can slip through.';
+
+// Returns { text, redactions } — redactions is a list of { kind } counted so a
+// caller can log/telemeter what was scrubbed without re-exposing the secret.
+function scrubSecrets(input) {
+  let text = String(input == null ? '' : input);
+  const redactions = [];
+  for (const p of REDACTION_PATTERNS) {
+    text = text.replace(p.re, (...args) => {
+      redactions.push({ kind: p.kind });
+      return p.replace(...args);
+    });
+  }
+  return { text, redactions };
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter parse / serialize
+// ---------------------------------------------------------------------------
+//
+// A deliberately small YAML-ish subset: `key: value` lines between two `---`
+// fences. No nested maps, no flow collections, no anchors. Records this library
+// writes only ever use scalar fields (§3.2), so a full YAML parser (a dep,
+// forbidden by D11) is unnecessary. Unknown keys are preserved verbatim in
+// `extra` so the migration of pre-existing files (which carry name/description/
+// metadata blocks) is lossless.
+
+function parseScalar(raw) {
+  const v = raw.trim();
+  if (v === '' ) return '';
+  if (v === 'null' || v === '~') return null;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  // Quoted string: strip the quotes, keep the literal inside.
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    return v.slice(1, -1);
+  }
+  // Number, but only if it round-trips exactly (avoid mangling ids/dates).
+  if (/^-?\d+$/.test(v)) return parseInt(v, 10);
+  if (/^-?\d*\.\d+$/.test(v)) return parseFloat(v);
+  return v;
+}
+
+// A scalar needs quoting if it could be misread on parse (looks like a bool/
+// null/number, is empty, or contains a leading/trailing space or a colon-space
+// that would confuse the key:value split).
+function needsQuote(v) {
+  if (v === '') return true;
+  if (/^(null|~|true|false)$/.test(v)) return true;
+  if (/^-?\d+(\.\d+)?$/.test(v)) return true;
+  if (/^[\s]|[\s]$/.test(v)) return true;
+  if (/[:#]/.test(v)) return true;
+  return false;
+}
+
+function serializeScalar(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return String(v);
+  const s = String(v);
+  if (needsQuote(s)) {
+    return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  }
+  return s;
+}
+
+// Parse a full record file (markdown with frontmatter). Fails SAFE: on any
+// malformed input it returns a record with the raw text as body and an empty
+// frontmatter rather than throwing, so a hook reading a poisoned/corrupt file
+// never crashes the session (D11 fail-open posture, matches lib/io.js).
+//
+// Returns { frontmatter, extra, body, order, malformed }
+//   frontmatter — the memory-v2 schema fields present (typed)
+//   extra       — any other key:value lines preserved verbatim (migration)
+//   body        — everything after the closing fence
+//   order       — the key order as encountered (so re-serialize is stable)
+//   malformed   — true if there was no valid frontmatter block
+function parseRecord(raw) {
+  const text = String(raw == null ? '' : raw);
+  const empty = { frontmatter: {}, extra: {}, body: text, order: [], malformed: true };
+  // Frontmatter must be the very first thing in the file.
+  if (!text.startsWith('---')) return empty;
+  // Find the opening fence line and the next closing fence.
+  const lines = text.split('\n');
+  if (lines[0].trim() !== '---') return empty;
+  let close = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') { close = i; break; }
+  }
+  if (close === -1) return empty; // unterminated frontmatter -> treat as body
+
+  const frontmatter = {};
+  const extra = {};
+  const order = [];
+  let lastKey = null;
+  let lastBucket = null;
+  for (let i = 1; i < close; i++) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    // A nested / indented line (e.g. the `metadata:` block in existing files).
+    // We don't model nesting; preserve the whole indented line under the parent
+    // key so migration stays lossless.
+    if (/^\s+\S/.test(line) && lastKey !== null && lastBucket) {
+      lastBucket[lastKey] = (lastBucket[lastKey] === null ? '' : lastBucket[lastKey])
+        + '\n' + line;
+      continue;
+    }
+    const m = line.match(/^([A-Za-z0-9_-]+):(.*)$/);
+    if (!m) continue; // skip a line we can't parse; don't crash
+    const key = m[1];
+    const val = parseScalar(m[2]);
+    if (FIELD_ORDER.includes(key)) {
+      frontmatter[key] = val;
+      lastBucket = frontmatter;
+    } else {
+      extra[key] = val;
+      lastBucket = extra;
+    }
+    lastKey = key;
+    if (!order.includes(key)) order.push(key);
+  }
+
+  const body = lines.slice(close + 1).join('\n');
+  return { frontmatter, extra, body, order, malformed: false };
+}
+
+// Serialize a record { frontmatter, extra?, body } back to markdown. The
+// canonical field order (FIELD_ORDER) leads; any `extra` (preserved unknown
+// keys) follows in insertion order. This keeps round-trips stable and diffs
+// tight during migration.
+function serializeRecord(record) {
+  const fm = record.frontmatter || {};
+  const extra = record.extra || {};
+  const out = ['---'];
+  for (const key of FIELD_ORDER) {
+    if (Object.prototype.hasOwnProperty.call(fm, key)) {
+      out.push(serializeField(key, fm[key]));
+    }
+  }
+  for (const key of Object.keys(extra)) {
+    if (FIELD_ORDER.includes(key)) continue; // never duplicate a schema key
+    out.push(serializeField(key, extra[key]));
+  }
+  out.push('---');
+  const body = record.body == null ? '' : String(record.body);
+  // The closing fence line is terminated with its own newline; `body` is then
+  // appended verbatim. parseRecord returns body as lines.slice(close+1) joined
+  // by '\n', so a blank line that sat between the fence and the content shows up
+  // as a leading '\n' in body — appending after the fence's own '\n' reproduces
+  // the original spacing exactly. Round-trip is byte-stable (see memory.test.js).
+  return out.join('\n') + '\n' + body;
+}
+
+// Serialize one field. A value that was preserved as a multiline indented block
+// (migration `extra`, e.g. `metadata:` + its children) is emitted verbatim.
+function serializeField(key, value) {
+  if (typeof value === 'string' && value.includes('\n')) {
+    // Multiline preserved block: first physical line is this key's own value,
+    // the rest are already-indented child lines captured on parse.
+    const [head, ...rest] = value.split('\n');
+    const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
+    return [headOut, ...rest].join('\n');
+  }
+  return `${key}: ${serializeScalar(value)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+// Returns an array of human-readable problem strings; empty means valid.
+// Intentionally does NOT throw — callers decide whether an invalid record is
+// fatal (writeRecord refuses) or merely surfaced (a reader logging a warning).
+function validateFrontmatter(fm) {
+  const problems = [];
+  if (!fm || typeof fm !== 'object') return ['frontmatter is not an object'];
+  if (!fm.id) problems.push('missing id');
+  if (!TYPES.includes(fm.type)) problems.push(`type must be one of ${TYPES.join('|')} (got ${JSON.stringify(fm.type)})`);
+  if (!fm.scope) problems.push('missing scope');
+  if (fm.tier !== undefined && fm.tier !== null && !TIERS.includes(fm.tier)) {
+    problems.push(`tier must be one of ${TIERS.join('|')} (got ${JSON.stringify(fm.tier)})`);
+  }
+  if (fm.importance !== undefined && fm.importance !== null) {
+    const n = Number(fm.importance);
+    if (Number.isNaN(n) || n < 0 || n > 1) problems.push('importance must be 0.0–1.0');
+  }
+  if (fm.source !== undefined && fm.source !== null && !SOURCES.includes(fm.source)) {
+    problems.push(`source must be one of ${SOURCES.join('|')} (got ${JSON.stringify(fm.source)})`);
+  }
+  if (fm.uses !== undefined && fm.uses !== null && !Number.isInteger(Number(fm.uses))) {
+    problems.push('uses must be an integer');
+  }
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+// Id
+// ---------------------------------------------------------------------------
+
+// Generate an id. Prefer a caller-supplied id (a hook MUST pass one). When none
+// is given, use crypto.randomUUID() — explicitly allowed by the dispatch —
+// rather than Math.random(). NEVER call this bare inside a hook that is meant to
+// be deterministic; pass your own id there.
+function newId(supplied) {
+  if (supplied) return String(supplied);
+  return crypto.randomUUID();
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem: scope directories, read, write/upsert, archive
+// ---------------------------------------------------------------------------
+
+// Resolve one agent scope directory. `root` is the repo's `.claude/agent-memory`
+// (caller supplies it — the library never guesses cwd). `scope` maps to
+// <plugin>-<scope>. Per-agent isolation (D4) is enforced here: this returns a
+// single directory and nothing above it is ever read as records.
+function scopeDir(root, plugin, scope) {
+  return path.join(root, `${plugin || 'forge'}-${scope}`);
+}
+
+// Read every record in exactly ONE scope directory. Never descends into or
+// reads sibling scopes — this is the per-scope isolation guarantee (D4). Skips
+// MEMORY.md (an index, not a record — §8) and any non-.md file. A malformed
+// file is returned with malformed:true rather than throwing, so one poisoned
+// file never blocks the rest of the scope.
+//
+// Returns [{ file, frontmatter, extra, body, malformed }].
+function readScope(root, plugin, scope) {
+  const dir = scopeDir(root, plugin, scope);
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch (e) {
+    return []; // no such scope yet — fail open, empty
+  }
+  const records = [];
+  for (const name of names) {
+    if (name === 'MEMORY.md') continue; // index, not a record (§8)
+    if (!name.endsWith('.md')) continue;
+    const full = path.join(dir, name);
+    let raw;
+    try {
+      const st = fs.statSync(full);
+      if (!st.isFile()) continue;
+      raw = fs.readFileSync(full, 'utf8');
+    } catch (e) {
+      continue; // unreadable — skip, don't crash
+    }
+    const parsed = parseRecord(raw);
+    records.push({ file: full, ...parsed });
+  }
+  return records;
+}
+
+// Build a filename for a record. Deterministic from the id so upsert can find
+// the existing file. Ids may contain characters unsafe for a filename, so they
+// are sanitized; the id inside the frontmatter remains authoritative.
+function recordFileName(id) {
+  const safe = String(id).replace(/[^A-Za-z0-9_.-]/g, '-');
+  return `${safe}.md`;
+}
+
+// Where superseded records are archived (§3.2: old kept, archived — never
+// destroyed). A sibling `_archive/` dir INSIDE the same scope, so history stays
+// per-scope and diff-visible, and readScope (which lists only the scope dir's
+// own entries, and skips non-files implicitly via the .md filter) does not
+// surface archived records as live ones... except _archive is a directory, so
+// the `.md` check would skip it anyway; we also guard by name.
+const ARCHIVE_DIR = '_archive';
+
+// Write (create or upsert) a record.
+//
+// opts:
+//   root, plugin, scope   — locate the scope dir (required)
+//   frontmatter           — schema fields; `id` required; `scope` defaulted from `scope` arg
+//   body                  — record body (string)
+//   now                   — ISO8601 timestamp string the CALLER supplies (required for
+//                           created/lastUsed stamping — see the no-Date.now note).
+//                           If absent, created/lastUsed are left to the caller's frontmatter.
+//   supersedesId          — if set (or frontmatter.supersedes set), the named record's
+//                           file is archived (moved to _archive/) before this write.
+//
+// Every write scrubs the body AND the string frontmatter values through
+// scrubSecrets first. Refuses (throws) on an INVALID record — a bad write is a
+// programming error the caller must see, distinct from a bad READ which fails
+// open. Returns { file, redactions, archived }.
+function writeRecord(opts) {
+  const { root, plugin, scope, now } = opts;
+  const dir = scopeDir(root, plugin, scope);
+
+  const fm = { ...(opts.frontmatter || {}) };
+  if (!fm.scope) fm.scope = scope;
+  if (!fm.id) throw new Error('writeRecord: frontmatter.id is required (supply from caller, do not autogenerate inside a hook)');
+  if (now) {
+    if (!fm.created) fm.created = now;
+  }
+
+  // Scrub. Body plus any string-valued frontmatter field (source content can
+  // land in either place).
+  const scrubbedBody = scrubSecrets(opts.body == null ? '' : opts.body);
+  const redactions = [...scrubbedBody.redactions];
+  for (const k of Object.keys(fm)) {
+    if (typeof fm[k] === 'string') {
+      const r = scrubSecrets(fm[k]);
+      fm[k] = r.text;
+      for (const red of r.redactions) redactions.push(red);
+    }
+  }
+
+  const problems = validateFrontmatter(fm);
+  if (problems.length) {
+    throw new Error(`writeRecord: invalid record: ${problems.join('; ')}`);
+  }
+
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    throw new Error(`writeRecord: cannot create scope dir ${dir}: ${e.message}`);
+  }
+
+  // Archive a superseded record if asked. Keep the old file (history), never
+  // delete it (§3.2).
+  let archived = null;
+  const supersedesId = opts.supersedesId || fm.supersedes;
+  if (supersedesId) {
+    fm.supersedes = supersedesId;
+    archived = archiveRecord(dir, supersedesId);
+  }
+
+  const file = path.join(dir, recordFileName(fm.id));
+  const out = serializeRecord({ frontmatter: fm, extra: opts.extra || {}, body: scrubbedBody.text });
+  fs.writeFileSync(file, out);
+  return { file, redactions, archived };
+}
+
+// Move a record file into the scope's _archive/ dir. Returns the archive path,
+// or null if the record didn't exist (nothing to archive is not an error).
+function archiveRecord(dir, id) {
+  const src = path.join(dir, recordFileName(id));
+  try {
+    if (!fs.statSync(src).isFile()) return null;
+  } catch (e) {
+    return null; // no such record — nothing to archive
+  }
+  const archiveDir = path.join(dir, ARCHIVE_DIR);
+  try {
+    fs.mkdirSync(archiveDir, { recursive: true });
+  } catch (e) {
+    return null;
+  }
+  // Never clobber an existing archived version: suffix with a counter.
+  let dest = path.join(archiveDir, recordFileName(id));
+  let n = 1;
+  while (fs.existsSync(dest)) {
+    dest = path.join(archiveDir, `${recordFileName(id).replace(/\.md$/, '')}.${n}.md`);
+    n++;
+  }
+  try {
+    fs.renameSync(src, dest);
+    return dest;
+  } catch (e) {
+    return null;
+  }
+}
+
+module.exports = {
+  TYPES, SCOPES, TIERS, SOURCES, FIELD_ORDER,
+  REDACTION_PATTERNS, REDACTION_CAVEAT,
+  scrubSecrets,
+  parseScalar, serializeScalar,
+  parseRecord, serializeRecord,
+  validateFrontmatter,
+  newId,
+  scopeDir, readScope, recordFileName, writeRecord, archiveRecord,
+  ARCHIVE_DIR,
+};

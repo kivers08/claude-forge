@@ -1,4 +1,14 @@
 ---
+id: f833fbda-3fd9-49e4-95b3-adbd9f413428
+type: lesson
+scope: reviewer
+tier: semantic
+importance: 0.5
+created: "2026-09-17T01:17:45.812Z"
+lastUsed: null
+uses: 0
+source: authored
+supersedes: null
 name: security-hasunquotedsequence-bypass
 description: hasUnquotedSequence (lib/segment-split.js) can be defeated by quoting a single word of a real command, letting it slip past every guard that uses it (merge-gate, pr-create, etc) — check this on every guard-touching diff.
 metadata:

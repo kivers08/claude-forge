@@ -1,4 +1,14 @@
 ---
+id: 8507a532-20a1-44db-b01e-d82b4f83dafb
+type: lesson
+scope: bug-fixer
+tier: semantic
+importance: 0.5
+created: "2026-09-17T01:17:45.810Z"
+lastUsed: null
+uses: 0
+source: authored
+supersedes: null
 name: flag-semantics-claude-cli
 description: Empirically-verified claude CLI flag behavior relevant to headless (`claude -p`) dispatch security — don't trust a script's own comments about what a flag does, verify against `claude --help` and a live run.
 metadata:

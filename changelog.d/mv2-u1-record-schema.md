@@ -1,0 +1,3 @@
+section: Added
+- memory-v2 record foundation (D28, unit 1): `plugins/forge/hooks/lib/memory.js`, a stdlib-only library to read/write per-agent memory records as markdown-with-frontmatter under `.claude/agent-memory/<plugin>-<agent>/`, with per-scope read isolation (D4), a `supersedes` upsert that archives — never destroys — the old record, and a secret-redaction scrubber (PEM/API-key/token/`*_SECRET=` forms) run before every write.
+- `scripts/migrate-agent-memory.js`: an idempotent, additive migration that stamps the memory-v2 schema onto existing `.claude/agent-memory/**` records while preserving their content and prior frontmatter; MEMORY.md indexes are left untouched.
