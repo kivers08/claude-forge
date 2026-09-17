@@ -602,5 +602,167 @@ t('migrateFile scrubs a secret in an already-committed file (#6)', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+// --- Copilot finding #1: non-injective record filename (data loss) --------
+
+t('writeRecord throws on an unsafe id instead of colliding (Copilot #1)', () => {
+  const root = tmpRoot();
+  // 'a/b' would otherwise sanitize to 'a-b.md' and collide with the literal
+  // id 'a-b' — reject it instead of silently mangling it.
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'a/b', type: 'note', scope: 'implementer' },
+    body: 'x', now: '2026-09-16T00:00:00.000Z',
+  }), /unsafe record id/);
+  // The distinct, SAFE id 'a-b' must write cleanly and not be affected.
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'a-b', type: 'note', scope: 'implementer' },
+    body: 'safe write', now: '2026-09-16T00:00:00.000Z',
+  });
+  assert.ok(fs.existsSync(res.file));
+  assert.ok(fs.readFileSync(res.file, 'utf8').includes('safe write'));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord still accepts a normal UUID id (happy path unaffected)', () => {
+  const root = tmpRoot();
+  const id = mem.newId();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id, type: 'note', scope: 'implementer' },
+    body: 'uuid record', now: '2026-09-16T00:00:00.000Z',
+  });
+  assert.ok(fs.existsSync(res.file));
+  assert.strictEqual(path.basename(res.file), `${id}.md`);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('writeRecord throws on an id ending in .md (ambiguous with recordFileName)', () => {
+  const root = tmpRoot();
+  assert.throws(() => mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'record.md', type: 'note', scope: 'implementer' },
+    body: 'x', now: '2026-09-16T00:00:00.000Z',
+  }), /unsafe record id/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('isSafeId is exported and rejects/accepts as documented', () => {
+  assert.strictEqual(mem.isSafeId('a-b'), true);
+  assert.strictEqual(mem.isSafeId('a/b'), false);
+  assert.strictEqual(mem.isSafeId('.'), false);
+  assert.strictEqual(mem.isSafeId('..'), false);
+  assert.strictEqual(mem.isSafeId('x.md'), false);
+  assert.strictEqual(mem.isSafeId(mem.newId()), true);
+});
+
+// --- Copilot finding #2: non-atomic write (durability / data loss) --------
+
+t('a normal upsert still produces byte-identical on-disk content', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'atomic-1', type: 'note', scope: 'implementer' },
+    body: 'stable body', now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const reparsed = mem.parseRecord(onDisk);
+  const expected = mem.serializeRecord(reparsed);
+  assert.strictEqual(onDisk, expected, 'on-disk bytes must equal a re-serialize of themselves');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('after a successful upsert no .tmp-* file remains in the scope dir', () => {
+  const root = tmpRoot();
+  mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'atomic-2', type: 'note', scope: 'implementer' },
+    body: 'v1', now: '2026-09-16T00:00:00.000Z',
+  });
+  // Overwrite the same id (upsert) to exercise the tmp-write+rename path twice.
+  mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'atomic-2', type: 'note', scope: 'implementer' },
+    body: 'v2', now: '2026-09-16T01:00:00.000Z',
+  });
+  const dir = mem.scopeDir(root, 'forge', 'implementer');
+  const names = fs.readdirSync(dir);
+  assert.ok(!names.some((n) => n.includes('.tmp-')), `leftover tmp file: ${names.join(',')}`);
+  const onDisk = fs.readFileSync(path.join(dir, 'atomic-2.md'), 'utf8');
+  assert.ok(onDisk.includes('v2'), 'overwrite replaced content correctly');
+  assert.ok(!onDisk.includes('v1'), 'old content must not linger');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('overwriting an existing id replaces content correctly (no stale merge)', () => {
+  const root = tmpRoot();
+  const write = (body) => mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'overwrite-1', type: 'note', scope: 'implementer' },
+    body, now: '2026-09-16T00:00:00.000Z',
+  });
+  write('first content');
+  const res = write('second content, much longer than the first to catch truncation bugs');
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(onDisk.includes('second content'), onDisk);
+  assert.ok(!onDisk.includes('first content'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// --- Copilot finding #3: symlink containment (security) -------------------
+
+t('writeRecord throws when the scope dir is a symlink escaping root', () => {
+  const root = tmpRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mem-outside-'));
+  const linkPath = path.join(root, 'forge-implementer');
+  fs.symlinkSync(outside, linkPath, 'dir');
+  try {
+    assert.throws(() => mem.writeRecord({
+      root, plugin: 'forge', scope: 'implementer',
+      frontmatter: { id: 'esc-1', type: 'note', scope: 'implementer' },
+      body: 'x', now: '2026-09-16T00:00:00.000Z',
+    }), /escapes root/);
+    // The outside dir must remain empty — nothing was written through the symlink.
+    assert.deepStrictEqual(fs.readdirSync(outside), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+t('a normal (non-symlinked) scope dir still writes fine', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'implementer',
+    frontmatter: { id: 'normal-1', type: 'note', scope: 'implementer' },
+    body: 'ordinary', now: '2026-09-16T00:00:00.000Z',
+  });
+  assert.ok(fs.existsSync(res.file));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('readScope on a symlinked scope dir returns [] rather than throwing', () => {
+  const root = tmpRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mem-outside-'));
+  // Plant a real record OUTSIDE root, reachable only via the symlink.
+  fs.writeFileSync(path.join(outside, 'sneaky.md'), [
+    '---',
+    'id: sneaky',
+    'type: note',
+    'scope: reviewer',
+    '---',
+    '',
+    'should not be surfaced',
+  ].join('\n'));
+  const linkPath = path.join(root, 'forge-reviewer');
+  fs.symlinkSync(outside, linkPath, 'dir');
+  try {
+    assert.deepStrictEqual(mem.readScope(root, 'forge', 'reviewer'), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

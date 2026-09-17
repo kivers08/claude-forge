@@ -378,6 +378,46 @@ function newId(supplied) {
 // path.join can never escape `root`. All SCOPES and the `forge` plugin match.
 const SEGMENT_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+// SEGMENT_RE stops `..`/`/` from ever appearing INSIDE a segment string, but a
+// string check alone cannot stop a planted SYMLINK: if `<root>/forge-reviewer`
+// (or its `_archive/` dir, or an individual record file within it) is itself a
+// symlink pointing outside `root`, a naive path.join + fs call happily follows
+// it off the containment boundary. assertContained() closes that gap by
+// resolving real paths and checking containment before any filesystem mutation.
+//
+// `target` need not exist yet (e.g. a record file about to be created): walk up
+// to the nearest existing ancestor, resolve THAT real path, then re-append the
+// remaining (not-yet-existing) segments. If `root` itself doesn't exist yet
+// there is nothing planted to escape through, so containment trivially holds.
+function assertContained(root, target) {
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch (e) {
+    return; // root doesn't exist yet — nothing to escape through
+  }
+  let cursor = target;
+  const trailing = [];
+  let realCursor = null;
+  // Walk up from `target` until we find an existing ancestor we can realpath.
+  for (;;) {
+    try {
+      realCursor = fs.realpathSync(cursor);
+      break;
+    } catch (e) {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) { realCursor = cursor; break; } // reached fs root
+      trailing.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+  const realTarget = trailing.length ? path.join(realCursor, ...trailing) : realCursor;
+  const rel = path.relative(realRoot, realTarget);
+  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error(`memory: path escapes root via symlink or traversal: ${target} -> ${realTarget} (root ${realRoot})`);
+  }
+}
+
 function scopeDir(root, plugin, scope) {
   const p = plugin || 'forge';
   const s = String(scope);
@@ -398,8 +438,9 @@ function readScope(root, plugin, scope) {
   let dir;
   try {
     dir = scopeDir(root, plugin, scope);
+    assertContained(root, dir); // e.g. a symlinked scope dir — fail open on READ (D11)
   } catch (e) {
-    return []; // invalid scope segment — fail open on the READ path (D11)
+    return []; // invalid scope segment, or containment violation — fail open
   }
   let names;
   try {
@@ -426,12 +467,31 @@ function readScope(root, plugin, scope) {
   return records;
 }
 
+// Strict, INJECTIVE filename-safe id charset. Must start with an alphanumeric;
+// after that, alphanumeric/underscore/dot/hyphen only. `.` and `..` alone are
+// rejected (path-segment ambiguity), and an id ending in `.md` is rejected too
+// (would collide with recordFileName's own `${id}.md` suffix — `x` and `x.md`
+// would otherwise both resolve to `x.md.md` / `x.md`, an aliasing hazard).
+const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+function isSafeId(id) {
+  const s = String(id);
+  if (!SAFE_ID_RE.test(s)) return false;
+  if (s === '.' || s === '..') return false;
+  if (/\.md$/i.test(s)) return false;
+  return true;
+}
+
 // Build a filename for a record. Deterministic from the id so upsert can find
-// the existing file. Ids may contain characters unsafe for a filename, so they
-// are sanitized; the id inside the frontmatter remains authoritative.
+// the existing file. Callers MUST validate the id with isSafeId() first (see
+// writeRecord) — this function no longer sanitizes/mangles unsafe characters:
+// a lossy sanitize (e.g. replacing every unsafe char with `-`) is NOT
+// injective (`a/b` and `a-b` would both map to `a-b.md`), so two distinct ids
+// could silently collide and clobber each other's file on disk. Rejecting an
+// unsafe id up front (writeRecord throws) keeps this mapping injective for
+// every id that actually reaches the filesystem.
 function recordFileName(id) {
-  const safe = String(id).replace(/[^A-Za-z0-9_.-]/g, '-');
-  return `${safe}.md`;
+  return `${id}.md`;
 }
 
 // Where superseded records are archived (§3.2: old kept, archived — never
@@ -487,6 +547,9 @@ function writeRecord(opts) {
   const fm = { ...(opts.frontmatter || {}) };
   if (!fm.scope) fm.scope = scope;
   if (!fm.id) throw new Error('writeRecord: frontmatter.id is required (supply from caller, do not autogenerate inside a hook)');
+  if (!isSafeId(fm.id)) {
+    throw new Error(`writeRecord: unsafe record id (must match ${SAFE_ID_RE}, not '.'/'..', and not end in .md): ${fm.id}`);
+  }
   if (now) {
     if (!fm.created) fm.created = now;
   }
@@ -525,6 +588,12 @@ function writeRecord(opts) {
   } catch (e) {
     throw new Error(`writeRecord: cannot create scope dir ${dir}: ${e.message}`);
   }
+  // A planted symlink (the scope dir itself, or an ancestor) pointing outside
+  // `root` would otherwise let a write escape the store despite SEGMENT_RE
+  // guarding the string form of the path — see assertContained's own comment.
+  // The WRITE path must throw, not fail open (D11's fail-open posture is for
+  // READS only).
+  assertContained(root, dir);
 
   // Archive a superseded record if asked. Keep the old file (history), never
   // delete it (§3.2).
@@ -548,12 +617,31 @@ function writeRecord(opts) {
 
   const file = path.join(dir, recordFileName(fm.id));
   const out = serializeRecord({ frontmatter: fm, extra: extraOut, body: scrubbedBody.text });
-  fs.writeFileSync(file, out);
+  // Write atomically: a direct fs.writeFileSync(file, out) TRUNCATES the
+  // existing live record before the new bytes are durably written, so a
+  // crash/ENOSPC mid-write leaves an empty/partial record with no archive to
+  // fall back to (a same-id upsert archives nothing — there is nothing to
+  // recover from). Instead write to a fresh temp file in the SAME directory
+  // (same-dir rename is atomic on POSIX) and rename it into place; the live
+  // file is only ever replaced by a single atomic rename, never truncated
+  // in-place.
+  const tmp = path.join(dir, `${recordFileName(fm.id)}.tmp-${crypto.randomUUID()}`);
+  try {
+    fs.writeFileSync(tmp, out);
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (e2) { /* best-effort cleanup only */ }
+    throw e;
+  }
   return { file, redactions, archived };
 }
 
 // Move a record file into the scope's _archive/ dir. Returns the archive path,
 // or null if the record didn't exist (nothing to archive is not an error).
+// `dir` is trusted to already be containment-checked by the caller (writeRecord
+// calls assertContained(root, dir) before ever reaching here); this function
+// additionally guards the archive dir itself, since that is a second directory
+// a planted symlink could target independently of the scope dir.
 function archiveRecord(dir, id) {
   const src = path.join(dir, recordFileName(id));
   try {
@@ -566,6 +654,10 @@ function archiveRecord(dir, id) {
     throw new Error(`memory: cannot stat record to archive (${src}): ${e.message}`);
   }
   const archiveDir = path.join(dir, ARCHIVE_DIR);
+  // A symlinked `_archive/` dir must not let an archive move land outside the
+  // scope's parent tree. Check against dir's parent (the scope root's parent),
+  // matching the containment boundary writeRecord already enforces for `dir`.
+  assertContained(path.dirname(dir), archiveDir);
   // fs failure here is fatal, not swallowed — see above.
   fs.mkdirSync(archiveDir, { recursive: true });
   // Never clobber an existing archived version: suffix with a counter.
@@ -590,7 +682,8 @@ module.exports = {
   parseScalar, serializeScalar,
   parseRecord, serializeRecord,
   validateFrontmatter,
-  newId,
+  newId, isSafeId,
   scopeDir, readScope, recordFileName, writeRecord, archiveRecord,
+  assertContained,
   ARCHIVE_DIR,
 };
