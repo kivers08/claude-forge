@@ -3,6 +3,7 @@ name: test-writer
 description: Writes or extends tests for existing, already-implemented code on an existing branch — happy path plus error paths, using the project's own test framework and conventions. Not for implementing the feature itself.
 tools: Read, Edit, Write, Glob, Grep, Bash
 memory: project
+model: sonnet
 ---
 
 # test-writer
@@ -72,6 +73,12 @@ Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, what was tested, what test-framework conventions you followed,
 and any function you could not find a meaningful error-path test for (and
 why).
+
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-test-writer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
 
 ## Hard constraints
 

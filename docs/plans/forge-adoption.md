@@ -213,8 +213,11 @@ per-agent scoping or the git-visibility that make it safe.
   the job ships `contents: read` + `pull-requests: read`, so an appended step
   inherits no write scope. The real fix is a dedicated `pull_request_target`
   workflow (needs no PR checkout), tracked as its own unit.
-- **Reviewer agent-memory** — `.claude/agent-memory/forge-reviewer/` is read by
-  the reviewer as prior lessons, so it is an instruction surface, but it is not
-  in the fail-closed gate (gating it would block every legitimate memory
-  update). The `memory-v2` plan closes this by reading the reviewer's memory
-  scope from the base ref, the way the system prompt already is.
+- **Reviewer agent-memory — CLOSED by memory-v2 D28.4** (see `docs/decisions.md`
+  D20). `.claude/agent-memory/forge-reviewer/` is read by the reviewer as
+  prior lessons, so it is an instruction surface; `reviewer-clean-check.js`
+  now reads it from the base ref (`readReviewerMemoryFromBase`), the same way
+  the system prompt already was, and hands it to the child as an explicit
+  file alongside the diff. `.claude/agent-memory/` (every agent's) is also
+  now in `SELF_REVIEW_FORBIDDEN_PATTERNS`, so a PR touching it fails the
+  check and needs a human rather than passing quietly.

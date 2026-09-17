@@ -3,6 +3,7 @@ name: explorer
 description: Read-only research agent. Locates code, traces how something works, or answers "where is X / what calls Y" across the codebase, then reports back. Never edits anything and never assumes — cites file paths and line numbers for every claim.
 tools: Read, Glob, Grep
 memory: project
+model: haiku
 ---
 
 # explorer
@@ -59,6 +60,12 @@ mistake: <slug|none>
 
 `mistake` here means a search that missed something obvious, or a claim
 that turned out to be wrong when checked later — leave `none` otherwise.
+
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-explorer/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
 
 ## Hard constraints
 
