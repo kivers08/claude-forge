@@ -24,9 +24,10 @@ const crypto = require('crypto');
 // Schema (docs/plans/memory-v2.md §3.2)
 // ---------------------------------------------------------------------------
 
-// The SMALL type set. Adding a type is cheap, removing one is not (§3.2), so it
+// The type set: Anthropic's four native subject-types plus forge's `decision`
+// extension (D28.3). Adding a type is cheap, removing one is not (§3.2), so it
 // stays tight until a concrete need. Anything outside this set is invalid.
-const TYPES = ['fact', 'lesson', 'decision', 'note'];
+const TYPES = ['user', 'feedback', 'project', 'reference', 'decision'];
 
 // Known agent scopes (§3.2). An unknown scope is not rejected by the parser
 // (it fails open — see parseRecord), but writeRecord requires a caller-supplied
@@ -41,10 +42,14 @@ const SCOPES = [
 const TIERS = ['working', 'episodic', 'semantic'];
 const SOURCES = ['authored', 'learning-block', 'ambient'];
 
-// Frontmatter fields in canonical serialization order. Kept explicit so a
-// round-trip is stable and diffs stay minimal.
-const FIELD_ORDER = [
-  'id', 'type', 'scope', 'tier', 'importance',
+// D28.3: a record is a strict superset of Claude Code's native memory format.
+// `name`/`description` stay at the TOP level (the Anthropic fields); every
+// forge operational/ranking field moves under a single `metadata:` block.
+// Both orders are kept explicit so round-trips are stable and diffs stay
+// minimal.
+const TOP_LEVEL_ORDER = ['name', 'description'];
+const METADATA_ORDER = [
+  'type', 'scope', 'id', 'tier', 'importance',
   'created', 'lastUsed', 'uses', 'source', 'supersedes',
 ];
 
@@ -225,14 +230,23 @@ function serializeScalar(v) {
 // frontmatter rather than throwing, so a hook reading a poisoned/corrupt file
 // never crashes the session (D11 fail-open posture, matches lib/io.js).
 //
+// D28.3 shape: `name`/`description` are top-level scalars; every forge
+// operational field lives one level down under a `metadata:` block. This
+// parser therefore supports exactly ONE level of nesting — the `metadata:`
+// block only — and nothing deeper (§3.2's "bounded one-level nesting").
+//
 // Returns { frontmatter, extra, body, malformed }
-//   frontmatter — the memory-v2 schema fields present (typed)
-//   extra       — any other key:value lines preserved verbatim (migration)
+//   frontmatter — { name, description, metadata: {...} } — whichever of these
+//                 top-level fields were present; `metadata` is a real nested
+//                 object of whichever recognized/unknown sub-keys were present
+//   extra       — any other TOP-LEVEL key:value lines preserved verbatim
+//                 (migration losslessness for a pre-existing non-memory-v2 file)
 //   body        — everything after the closing fence
 //   malformed   — true if there was no valid frontmatter block
-// (No `order`: serializeRecord emits FIELD_ORDER then `extra` insertion order,
-// so a caller-visible `order` would imply a stability guarantee the serializer
-// does not honor. Dropped rather than left as dead, misleading output.)
+// (No `order`: serializeRecord emits TOP_LEVEL_ORDER, then `metadata:` in
+// METADATA_ORDER, then `extra` insertion order, so a caller-visible `order`
+// would imply a stability guarantee the serializer does not honor. Dropped
+// rather than left as dead, misleading output.)
 function parseRecord(raw) {
   const text = String(raw == null ? '' : raw);
   const empty = { frontmatter: {}, extra: {}, body: text, malformed: true };
@@ -250,27 +264,53 @@ function parseRecord(raw) {
   const frontmatter = {};
   const extra = {};
   let lastKey = null;
-  let lastBucket = null;
+  let lastBucket = null; // one of: frontmatter (top-level scalar), extra, or 'metadata'
+  let metadata = null; // becomes an object once a `metadata:` header is seen
   for (let i = 1; i < close; i++) {
     const line = lines[i];
     if (line.trim() === '') continue;
-    // A nested / indented line (e.g. the `metadata:` block in existing files).
-    // We don't model nesting; preserve the whole indented line under the parent
-    // key so migration stays lossless. Restricted to the `extra` bucket ONLY:
-    // a stray indented line under a TYPED schema key (e.g. `supersedes`) must be
-    // skipped, not appended — appending would turn a scalar field into a garbage
-    // string (a truthy `supersedes` triggers a bogus archive; a bad `importance`
-    // is a wrong number), and validateFrontmatter can't catch every such case.
-    if (/^\s+\S/.test(line) && lastKey !== null && lastBucket === extra) {
-      extra[lastKey] = (extra[lastKey] === null ? '' : extra[lastKey])
-        + '\n' + line;
-      continue;
+    // An indented continuation line. Two legitimate shapes reach here:
+    //   1. a `  key: value` child of an OPEN `metadata:` block — parse it into
+    //      the nested object;
+    //   2. a stray indented line under `extra`'s LAST key (migration
+    //      losslessness for an unrelated pre-existing nested/multiline value,
+    //      e.g. a non-memory-v2 file's own nested block) — preserved verbatim,
+    //      exactly as before D28.3.
+    // Restricted to those two buckets ONLY: a stray indented line under a
+    // TYPED top-level scalar key (`name`/`description`) must be skipped, not
+    // appended — appending would turn a scalar field into a garbage string,
+    // and validateFrontmatter can't catch every such case (bug #2, preserved).
+    if (/^\s+\S/.test(line)) {
+      if (lastBucket === 'metadata' && metadata) {
+        const cm = line.match(/^\s+([A-Za-z0-9_-]+):(.*)$/);
+        if (cm) metadata[cm[1]] = parseScalar(cm[2]);
+        continue;
+      }
+      if (lastKey !== null && lastBucket === extra) {
+        extra[lastKey] = (extra[lastKey] === null ? '' : extra[lastKey])
+          + '\n' + line;
+        continue;
+      }
+      continue; // stray indented line under a typed top-level scalar: skip
     }
     const m = line.match(/^([A-Za-z0-9_-]+):(.*)$/);
     if (!m) continue; // skip a line we can't parse; don't crash
     const key = m[1];
-    const val = parseScalar(m[2]);
-    if (FIELD_ORDER.includes(key)) {
+    const rawVal = m[2];
+    if (key === 'metadata') {
+      // Opens (or re-opens, if malformed input repeats the key — last wins) a
+      // nested metadata block. A non-empty rawVal on the `metadata:` line
+      // itself (e.g. `metadata: oops`) is not the documented shape; treat the
+      // block as present but empty rather than losing it into `extra` — the
+      // subsequent indented children (if any) still populate it.
+      metadata = {};
+      frontmatter.metadata = metadata;
+      lastBucket = 'metadata';
+      lastKey = key;
+      continue;
+    }
+    const val = parseScalar(rawVal);
+    if (TOP_LEVEL_ORDER.includes(key)) {
       frontmatter[key] = val;
       lastBucket = frontmatter;
     } else {
@@ -284,21 +324,26 @@ function parseRecord(raw) {
   return { frontmatter, extra, body, malformed: false };
 }
 
-// Serialize a record { frontmatter, extra?, body } back to markdown. The
-// canonical field order (FIELD_ORDER) leads; any `extra` (preserved unknown
-// keys) follows in insertion order. This keeps round-trips stable and diffs
-// tight during migration.
+// Serialize a record { frontmatter, extra?, body } back to markdown.
+// TOP_LEVEL_ORDER (name, description) leads, then a `metadata:` block whose
+// children follow METADATA_ORDER (then any unknown metadata sub-keys in
+// insertion order), each indented two spaces, then any top-level `extra`
+// (preserved unknown keys) in insertion order. This keeps round-trips stable
+// and diffs tight during migration.
 function serializeRecord(record) {
   const fm = record.frontmatter || {};
   const extra = record.extra || {};
   const out = ['---'];
-  for (const key of FIELD_ORDER) {
+  for (const key of TOP_LEVEL_ORDER) {
     if (Object.prototype.hasOwnProperty.call(fm, key)) {
       out.push(serializeField(key, fm[key]));
     }
   }
+  if (fm.metadata && typeof fm.metadata === 'object' && !Array.isArray(fm.metadata)) {
+    out.push(serializeField('metadata', fm.metadata));
+  }
   for (const key of Object.keys(extra)) {
-    if (FIELD_ORDER.includes(key)) continue; // never duplicate a schema key
+    if (key === 'metadata' || TOP_LEVEL_ORDER.includes(key)) continue; // never duplicate a schema key
     out.push(serializeField(key, extra[key]));
   }
   out.push('---');
@@ -364,7 +409,18 @@ function serializeField(key, value) {
   if (value && typeof value === 'object') {
     const keys = Object.keys(value);
     if (keys.length === 0) return `${key}: {}`;
-    const children = keys.map((k) => `  ${k}: ${serializeScalar(value[k])}`);
+    // The `metadata:` block (D28.3) has a canonical child order (METADATA_ORDER)
+    // so its own round-trip is stable and diffs stay minimal, same rationale as
+    // TOP_LEVEL_ORDER above; any unknown metadata sub-key follows in insertion
+    // order. A plain nested map elsewhere (e.g. inside `extra`) has no such
+    // canonical order and keeps Object.keys insertion order as before.
+    const orderedKeys = key === 'metadata'
+      ? [
+        ...METADATA_ORDER.filter((k) => Object.prototype.hasOwnProperty.call(value, k)),
+        ...keys.filter((k) => !METADATA_ORDER.includes(k)),
+      ]
+      : keys;
+    const children = orderedKeys.map((k) => `  ${k}: ${serializeScalar(value[k])}`);
     return [`${key}:`, ...children].join('\n');
   }
   return `${key}: ${serializeScalar(value)}`;
@@ -380,31 +436,38 @@ function serializeField(key, value) {
 function validateFrontmatter(fm) {
   const problems = [];
   if (!fm || typeof fm !== 'object') return ['frontmatter is not an object'];
-  if (!fm.id) problems.push('missing id');
-  if (!TYPES.includes(fm.type)) problems.push(`type must be one of ${TYPES.join('|')} (got ${JSON.stringify(fm.type)})`);
-  if (!fm.scope) problems.push('missing scope');
-  if (fm.tier !== undefined && fm.tier !== null && !TIERS.includes(fm.tier)) {
-    problems.push(`tier must be one of ${TIERS.join('|')} (got ${JSON.stringify(fm.tier)})`);
+  if (typeof fm.name !== 'string' || fm.name.trim() === '') problems.push('missing name');
+  if (typeof fm.description !== 'string' || fm.description.trim() === '') problems.push('missing description');
+  const md = fm.metadata;
+  if (!md || typeof md !== 'object' || Array.isArray(md)) {
+    problems.push('missing metadata');
+    return problems; // nothing further to check without a metadata object
   }
-  if (fm.importance !== undefined && fm.importance !== null) {
+  if (!md.id) problems.push('missing metadata.id');
+  if (!TYPES.includes(md.type)) problems.push(`metadata.type must be one of ${TYPES.join('|')} (got ${JSON.stringify(md.type)})`);
+  if (!md.scope) problems.push('missing metadata.scope');
+  if (md.tier !== undefined && md.tier !== null && !TIERS.includes(md.tier)) {
+    problems.push(`metadata.tier must be one of ${TIERS.join('|')} (got ${JSON.stringify(md.tier)})`);
+  }
+  if (md.importance !== undefined && md.importance !== null) {
     // Guard against empty-string / whitespace: Number('') is 0 (not NaN), so a
     // bare `importance:` line (which parseScalar yields as '') would sneak
     // through as 0 without this explicit numeric-shape check.
-    const isNumericShape = typeof fm.importance === 'number'
-      || /^-?\d*\.?\d+$/.test(String(fm.importance));
-    const n = Number(fm.importance);
+    const isNumericShape = typeof md.importance === 'number'
+      || /^-?\d*\.?\d+$/.test(String(md.importance));
+    const n = Number(md.importance);
     if (!isNumericShape || Number.isNaN(n) || n < 0 || n > 1) {
-      problems.push('importance must be 0.0–1.0');
+      problems.push('metadata.importance must be 0.0–1.0');
     }
   }
-  if (fm.source !== undefined && fm.source !== null && !SOURCES.includes(fm.source)) {
-    problems.push(`source must be one of ${SOURCES.join('|')} (got ${JSON.stringify(fm.source)})`);
+  if (md.source !== undefined && md.source !== null && !SOURCES.includes(md.source)) {
+    problems.push(`metadata.source must be one of ${SOURCES.join('|')} (got ${JSON.stringify(md.source)})`);
   }
-  if (fm.uses !== undefined && fm.uses !== null) {
-    const isIntShape = typeof fm.uses === 'number'
-      || /^-?\d+$/.test(String(fm.uses));
-    if (!isIntShape || !Number.isInteger(Number(fm.uses)) || Number(fm.uses) < 0) {
-      problems.push('uses must be a non-negative integer');
+  if (md.uses !== undefined && md.uses !== null) {
+    const isIntShape = typeof md.uses === 'number'
+      || /^-?\d+$/.test(String(md.uses));
+    if (!isIntShape || !Number.isInteger(Number(md.uses)) || Number(md.uses) < 0) {
+      problems.push('metadata.uses must be a non-negative integer');
     }
   }
   return problems;
@@ -590,50 +653,52 @@ function scrubValueDeep(value, redactions) {
 
 // Write (create or upsert) a record.
 //
-// opts:
+// opts (D28.3 shape — a strict superset of Claude Code's native memory record):
 //   root, plugin, scope   — locate the scope dir (required)
-//   frontmatter           — schema fields; `id` required; `scope` defaulted from `scope` arg
+//   name, description     — top-level Anthropic fields (free-text; scrubbed like the body)
+//   metadata              — PARTIAL forge fields; `metadata.id` required;
+//                           `metadata.scope` defaulted from the `scope` arg
 //   body                  — record body (string)
 //   now                   — ISO8601 timestamp string the CALLER supplies (used to stamp
-//                           `created` when the frontmatter omits it — see the no-Date.now
-//                           note). `lastUsed` defaults to null (a fresh record has never
-//                           been recalled); unit 3's recall bumps it. If `now` is absent,
-//                           `created` is left to the caller's frontmatter.
-//   supersedesId          — if set (or frontmatter.supersedes set), the named record's
+//                           `metadata.created` when omitted — see the no-Date.now
+//                           note). `metadata.lastUsed` defaults to null (a fresh record has
+//                           never been recalled); unit 3's recall bumps it. If `now` is
+//                           absent, `created` is left to the caller's metadata.
+//   supersedesId          — if set (or metadata.supersedes set), the named record's
 //                           file is archived (moved to _archive/) before this write.
 //
-// Every write scrubs the body, the string frontmatter values, AND every string
-// nested in `extra` through scrubSecrets first. Refuses (throws) on an INVALID
-// record — a bad write is a
-// programming error the caller must see, distinct from a bad READ which fails
-// open. Returns { file, redactions, archived }.
+// Every write scrubs the body, `name`, `description`, every string nested in
+// `metadata` (except `metadata.id`), AND every string nested in `extra`
+// through scrubSecrets first. Refuses (throws) on an INVALID record — a bad
+// write is a programming error the caller must see, distinct from a bad READ
+// which fails open. Returns { file, redactions, archived }.
 function writeRecord(opts) {
   const { root, plugin, scope, now } = opts;
   const dir = scopeDir(root, plugin, scope);
 
-  const fm = { ...(opts.frontmatter || {}) };
-  if (!fm.scope) fm.scope = scope;
-  if (!fm.id) throw new Error('writeRecord: frontmatter.id is required (supply from caller, do not autogenerate inside a hook)');
-  if (!isSafeId(fm.id)) {
-    throw new Error(`writeRecord: unsafe record id (must match ${SAFE_ID_RE}, not '.'/'..', and not end in .md): ${fm.id}`);
+  const md = { ...(opts.metadata || {}) };
+  if (!md.scope) md.scope = scope;
+  if (!md.id) throw new Error('writeRecord: metadata.id is required (supply from caller, do not autogenerate inside a hook)');
+  if (!isSafeId(md.id)) {
+    throw new Error(`writeRecord: unsafe record id (must match ${SAFE_ID_RE}, not '.'/'..', and not end in .md): ${md.id}`);
   }
   if (now) {
-    if (!fm.created) fm.created = now;
+    if (!md.created) md.created = now;
   }
   // Default the full §3.2 schema so a record written via the happy path has
   // every ranking field on disk (unit 3's recall reads lastUsed/uses/tier/
   // importance/source — §3.3).
-  if (fm.lastUsed === undefined) fm.lastUsed = null;
-  if (fm.uses === undefined) fm.uses = 0;
-  if (fm.supersedes === undefined) fm.supersedes = null;
-  if (!fm.tier) fm.tier = 'semantic';
-  if (fm.importance === undefined) fm.importance = 0.5;
-  if (!fm.source) fm.source = 'authored';
+  if (md.lastUsed === undefined) md.lastUsed = null;
+  if (md.uses === undefined) md.uses = 0;
+  if (md.supersedes === undefined) md.supersedes = null;
+  if (!md.tier) md.tier = 'semantic';
+  if (md.importance === undefined) md.importance = 0.5;
+  if (!md.source) md.source = 'authored';
 
-  // Scrub EVERY write path before bytes touch disk (§4): the body, each
-  // string-valued frontmatter field, and every string nested in `extra`
-  // (free-text non-schema fields like a migrated `description`/`metadata`).
-  // `id` is EXCLUDED: it is a structural, already-charset-validated identifier
+  // Scrub EVERY write path before bytes touch disk (§4): the body, `name`,
+  // `description`, every string-valued `metadata` field, and every string
+  // nested in `extra` (free-text non-schema fields). `metadata.id` is
+  // EXCLUDED: it is a structural, already-charset-validated identifier
   // (isSafeId above), not free-text prose, and the filename is derived from it
   // below. Scrubbing it here would rewrite an id that happens to match a
   // redaction shape (e.g. `sk-1-...`) to `[REDACTED:api-key]` AFTER isSafeId
@@ -641,16 +706,29 @@ function writeRecord(opts) {
   // went through isSafeId.
   const scrubbedBody = scrubSecrets(opts.body == null ? '' : opts.body);
   const redactions = [...scrubbedBody.redactions];
-  for (const k of Object.keys(fm)) {
+  let name = opts.name;
+  if (typeof name === 'string') {
+    const r = scrubSecrets(name);
+    name = r.text;
+    for (const red of r.redactions) redactions.push(red);
+  }
+  let description = opts.description;
+  if (typeof description === 'string') {
+    const r = scrubSecrets(description);
+    description = r.text;
+    for (const red of r.redactions) redactions.push(red);
+  }
+  for (const k of Object.keys(md)) {
     if (k === 'id') continue;
-    if (typeof fm[k] === 'string') {
-      const r = scrubSecrets(fm[k]);
-      fm[k] = r.text;
+    if (typeof md[k] === 'string') {
+      const r = scrubSecrets(md[k]);
+      md[k] = r.text;
       for (const red of r.redactions) redactions.push(red);
     }
   }
   const scrubbedExtra = scrubValueDeep(opts.extra || {}, redactions);
 
+  const fm = { name, description, metadata: md };
   const problems = validateFrontmatter(fm);
   if (problems.length) {
     throw new Error(`writeRecord: invalid record: ${problems.join('; ')}`);
@@ -672,19 +750,19 @@ function writeRecord(opts) {
   }
 
   // Archive a superseded record if asked. Keep the old file (history), never
-  // delete it (§3.2). `supersedesId` is attacker-reachable frontmatter (or an
+  // delete it (§3.2). `supersedesId` is attacker-reachable metadata (or an
   // opts value) that ends up straight in a filename passed to archiveRecord's
   // renameSync — an unvalidated value like `../../../etc/passwd` would move a
   // file from OUTSIDE the scope dir into the committed store. Validate with
   // the same isSafeId() charset the record's own id already goes through,
   // and throw (write path, not fail-open) before archiveRecord ever runs.
   let archived = null;
-  const supersedesId = opts.supersedesId || fm.supersedes;
+  const supersedesId = opts.supersedesId || md.supersedes;
   if (supersedesId) {
     if (!isSafeId(supersedesId)) {
       throw new Error(`writeRecord: unsafe supersedes id (must match ${SAFE_ID_RE}, not '.'/'..', and not end in .md): ${supersedesId}`);
     }
-    fm.supersedes = supersedesId;
+    md.supersedes = supersedesId;
     archived = archiveRecord(dir, supersedesId);
   }
 
@@ -699,8 +777,8 @@ function writeRecord(opts) {
     extraOut.redactionCaveat = REDACTION_CAVEAT;
   }
 
-  const file = path.join(dir, recordFileName(fm.id));
-  const out = serializeRecord({ frontmatter: fm, extra: extraOut, body: scrubbedBody.text });
+  const file = path.join(dir, recordFileName(md.id));
+  const out = serializeRecord({ frontmatter: { name, description, metadata: md }, extra: extraOut, body: scrubbedBody.text });
   // Write atomically: a direct fs.writeFileSync(file, out) TRUNCATES the
   // existing live record before the new bytes are durably written, so a
   // crash/ENOSPC mid-write leaves an empty/partial record with no archive to
@@ -709,7 +787,7 @@ function writeRecord(opts) {
   // (same-dir rename is atomic on POSIX) and rename it into place; the live
   // file is only ever replaced by a single atomic rename, never truncated
   // in-place.
-  const tmp = path.join(dir, `${recordFileName(fm.id)}.tmp-${crypto.randomUUID()}`);
+  const tmp = path.join(dir, `${recordFileName(md.id)}.tmp-${crypto.randomUUID()}`);
   try {
     fs.writeFileSync(tmp, out);
     fs.renameSync(tmp, file);
@@ -765,7 +843,7 @@ function archiveRecord(dir, id) {
 }
 
 module.exports = {
-  TYPES, SCOPES, TIERS, SOURCES, FIELD_ORDER,
+  TYPES, SCOPES, TIERS, SOURCES, TOP_LEVEL_ORDER, METADATA_ORDER,
   REDACTION_PATTERNS, REDACTION_CAVEAT,
   scrubSecrets, scrubValueDeep,
   parseScalar, serializeScalar,

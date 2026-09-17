@@ -2,11 +2,14 @@
 'use strict';
 // memory-v2 migration (docs/plans/memory-v2.md §8, unit 1) — SAFE SEED ONLY.
 //
-// A MECHANICAL pass that adds the memory-v2 frontmatter schema (§3.2) to the
-// EXISTING .claude/agent-memory/**/*.md records WITHOUT losing their content or
-// their pre-existing frontmatter. This is a script (NOT a hook), so it is
-// allowed to use Date/crypto for timestamps and ids — the no-Date.now rule in
-// memory.js is about hooks specifically.
+// A MECHANICAL pass that adds the memory-v2 frontmatter schema (§3.2/D28.3) to
+// the EXISTING .claude/agent-memory/**/*.md records WITHOUT losing their
+// content or their pre-existing frontmatter. This is a script (NOT a hook), so
+// it is allowed to use Date/crypto for timestamps and ids — the no-Date.now
+// rule in memory.js is about hooks specifically.
+//
+// D28.3 shape: `name`/`description` stay top-level (Anthropic fields); every
+// forge operational field is emitted under a nested `metadata:` block.
 //
 // NOT RUN as part of unit 1 (D28.2): adoption migration is EXPLICIT — a human
 // runs it deliberately at adoption, never silently on SessionStart. Unit 1 does
@@ -44,18 +47,15 @@
 //     frontmatter and are left byte-for-byte untouched.
 //
 //   * Existing records already carry a `name`/`description`/`metadata` block
-//     from the persistent-agent-memory system. That is a DIFFERENT schema from
-//     memory-v2's. We PRESERVE those keys verbatim (they ride along in the
-//     parser's `extra`) and ADD the memory-v2 fields alongside them. Nothing is
-//     removed — lossless, reversible via git.
-//
-//   * `type` mapping: the existing files use metadata.type values of `project`
-//     and `feedback`, which are NOT in memory-v2's small set (fact|lesson|
-//     decision|note). We map by intent, not by string:
-//       - security/behavioral "we learned X the hard way" records -> `lesson`
-//       - everything else (project state, feedback) -> `note`
-//     A human reviewer can retype any record later; `note` is the safe default
-//     when in doubt (§3.2: adding/retyping is cheap).
+//     from the persistent-agent-memory system — this is ALREADY the Anthropic
+//     native shape D28.3 adopted as memory-v2's own top level. We PRESERVE
+//     `name`/`description` verbatim and reuse a pre-existing `metadata.type`
+//     directly per the D28.3 migration mapping: `feedback->feedback`,
+//     `project->project`, `user->user`, `reference->reference` (carried
+//     through as-is — all four are already in the new TYPES set). A file with
+//     no recognized `metadata.type` at all falls back to `project` (the safe
+//     default for "some pre-existing state/context note", §3.2: retyping is
+//     cheap). Nothing is removed — lossless, reversible via git.
 //
 //   * `scope` comes from the directory name (`forge-<scope>`), the D4 source of
 //     truth — never guessed.
@@ -80,23 +80,17 @@ const rootArg = argv.includes('--root') ? argv[argv.indexOf('--root') + 1] : nul
 const REPO = path.resolve(rootArg || process.env.FORGE_REPO_ROOT || path.join(__dirname, '..'));
 const MEM_ROOT = path.join(REPO, '.claude', 'agent-memory');
 
-// Records whose content is a "we learned this the hard way" lesson map to
-// `lesson`; everything else to `note`. Keyed by filename slug for the known
-// pre-existing set; unknown files fall through to the heuristic.
-const KNOWN_LESSON_SLUGS = new Set([
-  'security_hasUnquotedSequence_bypass',
-  'flag_semantics_claude_cli',
-  'headless_reviewer_git_commentary',
-  'feedback_local_testing_scope',
-]);
+// D28.3 migration mapping: a pre-existing `metadata.type` in the Anthropic set
+// carries straight through (it's already valid memory-v2). Anything else
+// (missing, or a value outside the new TYPES set) falls back to `project` —
+// the safe default for "some pre-existing state/context note" (§3.2: adding/
+// retyping a type later is cheap).
+const CARRY_THROUGH_TYPES = new Set(['user', 'feedback', 'project', 'reference']);
 
-function classifyType(fileSlug, extra) {
-  if (KNOWN_LESSON_SLUGS.has(fileSlug)) return 'lesson';
-  const mt = (extra && typeof extra.metadata === 'string') ? extra.metadata : '';
-  // metadata rides as a multiline block; a `type: feedback` inside it hints a
-  // behavioral lesson.
-  if (/type:\s*feedback/.test(mt)) return 'lesson';
-  return 'note';
+function classifyType(existingMetadata) {
+  const t = existingMetadata && existingMetadata.type;
+  if (CARRY_THROUGH_TYPES.has(t)) return t;
+  return 'project';
 }
 
 function nowIso() {
@@ -113,16 +107,28 @@ function scopeFromDir(dirName) {
 function migrateFile(full, plugin, scope, dry = DRY) {
   const raw = fs.readFileSync(full, 'utf8');
   const parsed = mem.parseRecord(raw);
-  // Already migrated? (has a memory-v2 id) -> idempotent no-op.
-  if (parsed.frontmatter && parsed.frontmatter.id) {
-    return { full, action: 'skip', reason: 'already has id' };
+  const existingMetadata = (parsed.frontmatter && parsed.frontmatter.metadata) || {};
+  // Already migrated? (metadata.id already stamped) -> idempotent no-op.
+  if (existingMetadata.id) {
+    return { full, action: 'skip', reason: 'already has metadata.id' };
   }
-  const slug = path.basename(full, '.md');
   const created = nowIso();
-  const fm = {
-    id: crypto.randomUUID(),
-    type: classifyType(slug, parsed.extra),
+  const name = typeof parsed.frontmatter.name === 'string' && parsed.frontmatter.name
+    ? parsed.frontmatter.name
+    : path.basename(full, '.md');
+  const description = typeof parsed.frontmatter.description === 'string' && parsed.frontmatter.description
+    ? parsed.frontmatter.description
+    : name;
+  const type = classifyType(existingMetadata);
+  const metadata = {
+    // Preserve any unrecognized pre-existing metadata sub-keys losslessly
+    // (e.g. a migration from a still-different prior shape), BEFORE the
+    // canonical fields below so type/scope/id/etc. always win over a
+    // same-named pre-existing key.
+    ...existingMetadata,
+    type,
     scope,
+    id: crypto.randomUUID(),
     tier: 'semantic', // hand-authored, curated records are durable knowledge
     importance: 0.5,
     created,
@@ -132,20 +138,25 @@ function migrateFile(full, plugin, scope, dry = DRY) {
     supersedes: null,
   };
   // Scrub before write, same as memory.js's writeRecord (plan §3.4): the body,
-  // each string frontmatter value, and every string nested in the preserved
-  // `extra` (name/description/metadata). A secret in an already-committed file
-  // must not survive migration unredacted.
+  // `name`, `description`, every string-valued `metadata` field (except the
+  // freshly-generated `id`), and every string nested in `extra`. A secret in
+  // an already-committed file must not survive migration unredacted.
   const redactions = [];
   const scrubbedBody = mem.scrubValueDeep(parsed.body, redactions);
-  for (const k of Object.keys(fm)) {
-    if (typeof fm[k] === 'string') fm[k] = mem.scrubValueDeep(fm[k], redactions);
+  const scrubbedName = mem.scrubValueDeep(name, redactions);
+  const scrubbedDescription = mem.scrubValueDeep(description, redactions);
+  for (const k of Object.keys(metadata)) {
+    if (k === 'id') continue;
+    if (typeof metadata[k] === 'string') metadata[k] = mem.scrubValueDeep(metadata[k], redactions);
   }
   const scrubbedExtra = mem.scrubValueDeep(parsed.extra, redactions);
-  // Preserve the pre-existing frontmatter (name/description/metadata) as `extra`,
-  // and keep the (scrubbed) body.
-  const out = mem.serializeRecord({ frontmatter: fm, extra: scrubbedExtra, body: scrubbedBody });
+  const out = mem.serializeRecord({
+    frontmatter: { name: scrubbedName, description: scrubbedDescription, metadata },
+    extra: scrubbedExtra,
+    body: scrubbedBody,
+  });
   if (!dry) fs.writeFileSync(full, out);
-  return { full, action: dry ? 'would-migrate' : 'migrate', type: fm.type, redactions: redactions.length };
+  return { full, action: dry ? 'would-migrate' : 'migrate', type: metadata.type, redactions: redactions.length };
 }
 
 function main() {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// Unit tests for lib/memory.js (D28, docs/plans/memory-v2.md unit 1).
+// Unit tests for lib/memory.js (D28, docs/plans/memory-v2.md unit 1, D28.3
+// record schema — Anthropic-superset, single vocabulary).
 // Standalone (like tier.test.js) rather than a cases.json entry: memory.js is a
 // pure library, not a hook script driven over stdin/stdout, so it is exercised
 // directly. Node stdlib only. Uses a per-run temp dir for filesystem cases so
@@ -30,21 +31,25 @@ function tmpRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'forge-mem-test-'));
 }
 
-// --- round-trip parse/serialize -------------------------------------------
+// --- round-trip parse/serialize (D28.3 shape: name/description top-level,
+// everything else under metadata:) --------------------------------------
 
-t('round-trips a full schema record byte-for-byte', () => {
+t('round-trips a full schema record byte-for-byte (metadata block)', () => {
   const src = [
     '---',
-    'id: abc-123',
-    'type: lesson',
-    'scope: reviewer',
-    'tier: semantic',
-    'importance: 0.7',
-    'created: "2026-09-16T00:00:00.000Z"',
-    'lastUsed: null',
-    'uses: 3',
-    'source: authored',
-    'supersedes: null',
+    'name: sample-lesson',
+    'description: a one-line relevance summary',
+    'metadata:',
+    '  type: feedback',
+    '  scope: reviewer',
+    '  id: abc-123',
+    '  tier: semantic',
+    '  importance: 0.7',
+    '  created: "2026-09-16T00:00:00.000Z"',
+    '  lastUsed: null',
+    '  uses: 3',
+    '  source: authored',
+    '  supersedes: null',
     '---',
     '',
     'The body of the lesson.',
@@ -53,38 +58,86 @@ t('round-trips a full schema record byte-for-byte', () => {
   ].join('\n');
   const parsed = mem.parseRecord(src);
   assert.strictEqual(parsed.malformed, false);
-  assert.strictEqual(parsed.frontmatter.id, 'abc-123');
-  assert.strictEqual(parsed.frontmatter.type, 'lesson');
-  assert.strictEqual(parsed.frontmatter.importance, 0.7);
-  assert.strictEqual(parsed.frontmatter.uses, 3);
-  assert.strictEqual(parsed.frontmatter.lastUsed, null);
+  assert.strictEqual(parsed.frontmatter.name, 'sample-lesson');
+  assert.strictEqual(parsed.frontmatter.description, 'a one-line relevance summary');
+  assert.strictEqual(parsed.frontmatter.metadata.type, 'feedback');
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'abc-123');
+  assert.strictEqual(parsed.frontmatter.metadata.importance, 0.7);
+  assert.strictEqual(parsed.frontmatter.metadata.uses, 3);
+  assert.strictEqual(parsed.frontmatter.metadata.lastUsed, null);
   assert.ok(parsed.body.includes('The body of the lesson.'));
   const out = mem.serializeRecord(parsed);
   assert.strictEqual(out, src, `round-trip mismatch:\n---got---\n${out}\n---want---\n${src}`);
 });
 
-t('preserves unknown frontmatter keys (migration losslessness)', () => {
+t('preserves unknown top-level frontmatter keys (migration losslessness)', () => {
   const src = [
     '---',
-    'id: x1',
-    'type: note',
-    'scope: implementer',
-    'name: some-name',
+    'name: x1',
     'description: a description with: a colon',
     'metadata:',
     '  type: feedback',
+    '  scope: implementer',
+    '  id: x1-id',
+    'legacyField: some-value',
     '---',
     '',
     'body here',
   ].join('\n');
   const parsed = mem.parseRecord(src);
-  assert.strictEqual(parsed.extra.name, 'some-name');
-  assert.ok(String(parsed.extra.metadata).includes('type: feedback'), 'metadata block preserved');
+  assert.strictEqual(parsed.extra.legacyField, 'some-value');
+  assert.strictEqual(parsed.frontmatter.metadata.type, 'feedback');
   const out = mem.serializeRecord(parsed);
   const reparsed = mem.parseRecord(out);
-  assert.strictEqual(reparsed.extra.name, 'some-name');
-  assert.ok(String(reparsed.extra.metadata).includes('type: feedback'));
+  assert.strictEqual(reparsed.extra.legacyField, 'some-value');
+  assert.strictEqual(reparsed.frontmatter.metadata.type, 'feedback');
   assert.ok(reparsed.body.includes('body here'));
+});
+
+t('unknown metadata sub-key is preserved and round-trips byte-stable', () => {
+  const src = [
+    '---',
+    'name: n',
+    'description: d',
+    'metadata:',
+    '  type: feedback',
+    '  scope: reviewer',
+    '  id: abc',
+    '  customThing: 42',
+    '---',
+    '',
+    'body',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  assert.strictEqual(parsed.frontmatter.metadata.customThing, 42);
+  const out = mem.serializeRecord(parsed);
+  assert.strictEqual(out, src, `round-trip mismatch:\n---got---\n${out}\n---want---\n${src}`);
+});
+
+t('metadata block parse/serialize is byte-stable with all schema fields plus an extra top-level field', () => {
+  const src = [
+    '---',
+    'name: n2',
+    'description: d2',
+    'metadata:',
+    '  type: project',
+    '  scope: coordinator',
+    '  id: id-2',
+    '  tier: working',
+    '  importance: 0.2',
+    '  created: "2026-01-01T00:00:00.000Z"',
+    '  lastUsed: "2026-01-02T00:00:00.000Z"',
+    '  uses: 1',
+    '  source: ambient',
+    '  supersedes: old-id',
+    'extraTopLevel: hello',
+    '---',
+    '',
+    'body text',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  const out = mem.serializeRecord(parsed);
+  assert.strictEqual(out, src, `round-trip mismatch:\n---got---\n${out}\n---want---\n${src}`);
 });
 
 // --- redaction of each secret kind ----------------------------------------
@@ -155,7 +208,8 @@ t('writeRecord scrubs secrets in the body before persisting', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'w1', type: 'note', scope: 'implementer' },
+    name: 'w1', description: 'a note',
+    metadata: { type: 'feedback', id: 'w1' },
     body: 'accidentally pasted GITHUB_TOKEN=ghp_' + 'z'.repeat(36),
     now: '2026-09-16T00:00:00.000Z',
   });
@@ -166,39 +220,40 @@ t('writeRecord scrubs secrets in the body before persisting', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-t('writeRecord scrubs secrets nested in extra (not just body/frontmatter)', () => {
+t('writeRecord scrubs secrets nested in extra (not just body/name/description/metadata)', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'x1', type: 'note', scope: 'reviewer' },
+    name: 'x1', description: 'a note',
+    metadata: { type: 'feedback', id: 'x1' },
     body: 'clean',
-    // extra carries migrated free-text (description) and a nested block
-    // (metadata) — both are write paths and must be scrubbed too.
+    // extra carries migrated free-text non-schema fields — both are write
+    // paths and must be scrubbed too.
     extra: {
-      description: 'pasted AKIAIOSFODNN7EXAMPLE here',
-      metadata: { nested: 'GITHUB_TOKEN=ghp_' + 'y'.repeat(36) },
+      note: 'pasted AKIAIOSFODNN7EXAMPLE here',
+      legacy: { nested: 'GITHUB_TOKEN=ghp_' + 'y'.repeat(36) },
     },
     now: '2026-09-16T00:00:00.000Z',
   });
   const onDisk = fs.readFileSync(res.file, 'utf8');
-  assert.ok(!/AKIAIOSFODNN7EXAMPLE/.test(onDisk), 'extra.description secret must not reach disk');
+  assert.ok(!/AKIAIOSFODNN7EXAMPLE/.test(onDisk), 'extra.note secret must not reach disk');
   assert.ok(!/ghp_y{36}/.test(onDisk), 'nested extra secret must not reach disk');
   assert.ok(onDisk.includes('[REDACTED'), onDisk);
   assert.ok(res.redactions.length >= 2, 'both extra secrets reported as redactions');
   // The nested map must SURVIVE (scrubbed), not be thrown away — proves the
   // secret is absent because it was redacted, not because the whole object was
   // stringified to `[object Object]` and lost (regression guard for bug #1).
-  assert.ok(onDisk.includes('metadata:'), 'nested metadata block survives');
+  assert.ok(onDisk.includes('legacy:'), 'nested legacy block survives');
   assert.ok(onDisk.includes('nested:'), 'nested child key survives');
   assert.ok(!onDisk.includes('[object Object]'), 'object must not be stringified away');
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-t('round-trips a nested extra.metadata object AND an array (bug #1)', () => {
+t('round-trips a nested extra object AND an array (bug #1)', () => {
   const record = {
-    frontmatter: { id: 'nest-1', type: 'note', scope: 'reviewer' },
+    frontmatter: { name: 'nest-1', description: 'd', metadata: { type: 'feedback', scope: 'reviewer', id: 'nest-1' } },
     extra: {
-      metadata: { type: 'feedback', level: 3 },
+      legacy: { type: 'feedback', level: 3 },
       tags: ['alpha', 'beta', 'gamma'],
     },
     body: 'body text',
@@ -208,8 +263,8 @@ t('round-trips a nested extra.metadata object AND an array (bug #1)', () => {
   assert.ok(!out.includes('[object Object]'), out);
   const reparsed = mem.parseRecord(out);
   // A one-level map round-trips into the block-form string parseRecord produces.
-  assert.ok(String(reparsed.extra.metadata).includes('type: feedback'), out);
-  assert.ok(String(reparsed.extra.metadata).includes('level: 3'), out);
+  assert.ok(String(reparsed.extra.legacy).includes('type: feedback'), out);
+  assert.ok(String(reparsed.extra.legacy).includes('level: 3'), out);
   // The array round-trips into a block sequence string, items preserved.
   assert.ok(String(reparsed.extra.tags).includes('- alpha'), out);
   assert.ok(String(reparsed.extra.tags).includes('- gamma'), out);
@@ -217,40 +272,46 @@ t('round-trips a nested extra.metadata object AND an array (bug #1)', () => {
   assert.strictEqual(mem.serializeRecord(reparsed), out, 're-serialize must be stable');
 });
 
-t('an indented line under a TYPED schema key is skipped, not appended (bug #2)', () => {
+t('an indented line under a TYPED top-level scalar key is skipped, not appended (bug #2)', () => {
   const src = [
     '---',
-    'id: sk-1',
-    'type: note',
-    'scope: reviewer',
-    'supersedes: null',
-    '  anything: here',   // stray indented line under a scalar schema key
+    'name: sk-1',
+    '  anything: here',   // stray indented line under a top-level scalar key
+    'description: d',
+    'metadata:',
+    '  type: feedback',
+    '  scope: reviewer',
+    '  id: sk-1-id',
+    '  supersedes: null',
     '---',
     'body',
   ].join('\n');
   const parsed = mem.parseRecord(src);
-  // supersedes must stay null (not become "\n  anything: here", which is truthy
-  // and would trigger a bogus archive on write).
-  assert.strictEqual(parsed.frontmatter.supersedes, null, JSON.stringify(parsed.frontmatter));
+  // name must stay 'sk-1' (not become "sk-1\n  anything: here").
+  assert.strictEqual(parsed.frontmatter.name, 'sk-1', JSON.stringify(parsed.frontmatter));
+  // supersedes must stay null (not become truthy, which would trigger a bogus
+  // archive on write).
+  assert.strictEqual(parsed.frontmatter.metadata.supersedes, null, JSON.stringify(parsed.frontmatter));
 });
 
 t('writeRecord defaults the full schema on a minimal write (bug #3)', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'min-1', type: 'note', scope: 'implementer' },
+    name: 'min-1', description: 'a minimal note',
+    metadata: { type: 'feedback', id: 'min-1' },
     body: 'minimal',
     now: '2026-09-16T00:00:00.000Z',
   });
   const onDisk = fs.readFileSync(res.file, 'utf8');
   const fm = mem.parseRecord(onDisk).frontmatter;
-  assert.strictEqual(fm.tier, 'semantic');
-  assert.strictEqual(fm.importance, 0.5);
-  assert.strictEqual(fm.lastUsed, null);
-  assert.strictEqual(fm.uses, 0);
-  assert.strictEqual(fm.source, 'authored');
-  assert.strictEqual(fm.supersedes, null);
-  assert.strictEqual(fm.created, '2026-09-16T00:00:00.000Z');
+  assert.strictEqual(fm.metadata.tier, 'semantic');
+  assert.strictEqual(fm.metadata.importance, 0.5);
+  assert.strictEqual(fm.metadata.lastUsed, null);
+  assert.strictEqual(fm.metadata.uses, 0);
+  assert.strictEqual(fm.metadata.source, 'authored');
+  assert.strictEqual(fm.metadata.supersedes, null);
+  assert.strictEqual(fm.metadata.created, '2026-09-16T00:00:00.000Z');
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -263,7 +324,7 @@ t('scopeDir rejects path-traversal scope/plugin segments (security #4)', () => {
   // writeRecord must refuse a crafted scope (write-outside-repo primitive).
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: '../../../tmp/evil',
-    frontmatter: { id: 'e', type: 'note' }, body: 'x',
+    name: 'e', description: 'd', metadata: { type: 'feedback', id: 'e' }, body: 'x',
     now: '2026-09-16T00:00:00.000Z',
   }), /invalid plugin\/scope/);
   // readScope fails OPEN (returns []) rather than throwing on a bad segment.
@@ -277,7 +338,8 @@ t('writeRecord stamps the redaction caveat into a record that had a redaction (#
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'cav-1', type: 'note', scope: 'reviewer' },
+    name: 'cav-1', description: 'd',
+    metadata: { type: 'feedback', id: 'cav-1' },
     body: 'leaked AKIAIOSFODNN7EXAMPLE here',
     now: '2026-09-16T00:00:00.000Z',
   });
@@ -292,7 +354,8 @@ t('a clean record does NOT carry the redaction caveat (#5)', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'cav-2', type: 'note', scope: 'reviewer' },
+    name: 'cav-2', description: 'd',
+    metadata: { type: 'feedback', id: 'cav-2' },
     body: 'a perfectly ordinary lesson',
     now: '2026-09-16T00:00:00.000Z',
   });
@@ -322,24 +385,25 @@ t('needsQuote flags YAML-special leading characters (#9)', () => {
 });
 
 t('validateFrontmatter rejects empty-string importance and uses (#10)', () => {
-  const pImp = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', importance: '' });
+  const pImp = mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', importance: '' } });
   assert.ok(pImp.some((p) => /importance/.test(p)), pImp.join(';'));
-  const pUses = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: '' });
+  const pUses = mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', uses: '' } });
   assert.ok(pUses.some((p) => /uses/.test(p)), pUses.join(';'));
   // A bare `importance:` line parses to '' — a round-trip must be caught.
-  const parsed = mem.parseRecord('---\nid: x\ntype: note\nscope: s\nimportance:\n---\nb');
+  const parsed = mem.parseRecord('---\nname: n\ndescription: d\nmetadata:\n  id: x\n  type: feedback\n  scope: s\n  importance:\n---\nb');
   assert.ok(mem.validateFrontmatter(parsed.frontmatter).some((p) => /importance/.test(p)));
 });
 
-t('writeRecord scrubs a secret in a string frontmatter value (#7)', () => {
+t('writeRecord scrubs a secret in a string metadata value (#7)', () => {
   const root = tmpRoot();
-  // Drive the frontmatter-string scrub loop (memory.js) directly: a secret
+  // Drive the metadata-string scrub loop (memory.js) directly: a secret
   // pasted into the `created` string schema field (emitted to disk, unconstrained
   // content) must be scrubbed like any other string write path, and counted.
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: {
-      id: 'fm-scrub-1', type: 'note', scope: 'reviewer',
+    name: 'fm-scrub-1', description: 'd',
+    metadata: {
+      type: 'feedback', id: 'fm-scrub-1',
       created: 'AKIAIOSFODNN7EXAMPLE',
     },
     body: 'clean',
@@ -355,7 +419,7 @@ t('archive collision counter suffixes when the same id is superseded twice (#7)'
   const root = tmpRoot();
   const write = (id, supersedes, body) => mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id, type: 'fact', scope: 'reviewer', supersedes },
+    name: id, description: 'd', metadata: { id, type: 'project', scope: 'reviewer', supersedes },
     body, now: '2026-09-16T00:00:00.000Z',
   });
   write('dup', null, 'v0');
@@ -375,7 +439,7 @@ t('parseScalar is a true inverse of serializeScalar for escaped quotes/backslash
   // backslash — serialize must escape, parse must unescape, byte-stable.
   const original = 'he said: "a\\b"';
   const round = mem.parseRecord(mem.serializeRecord({
-    frontmatter: { id: 'q1', type: 'note', scope: 'reviewer' },
+    frontmatter: { name: 'q1', description: 'd', metadata: { id: 'q1', type: 'feedback', scope: 'reviewer' } },
     extra: { note: original },
     body: '',
   }));
@@ -388,13 +452,13 @@ t('supersedes archives the old record, keeps history, writes the new one', () =>
   const root = tmpRoot();
   mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'old-1', type: 'fact', scope: 'reviewer' },
+    name: 'old-1', description: 'd', metadata: { id: 'old-1', type: 'project', scope: 'reviewer' },
     body: 'original value',
     now: '2026-09-16T00:00:00.000Z',
   });
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'new-1', type: 'fact', scope: 'reviewer', supersedes: 'old-1' },
+    name: 'new-1', description: 'd', metadata: { id: 'new-1', type: 'project', scope: 'reviewer', supersedes: 'old-1' },
     body: 'corrected value',
     now: '2026-09-16T01:00:00.000Z',
   });
@@ -405,7 +469,7 @@ t('supersedes archives the old record, keeps history, writes the new one', () =>
   assert.ok(fs.existsSync(path.join(dir, 'new-1.md')), 'new record present');
   // readScope must NOT surface the archived record.
   const live = mem.readScope(root, 'forge', 'reviewer');
-  const ids = live.map((r) => r.frontmatter.id).sort();
+  const ids = live.map((r) => r.frontmatter.metadata.id).sort();
   assert.deepStrictEqual(ids, ['new-1'], `live ids: ${ids}`);
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -414,7 +478,7 @@ t('archiving a non-existent supersedes id is not an error', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'n2', type: 'fact', scope: 'reviewer', supersedes: 'never-existed' },
+    name: 'n2', description: 'd', metadata: { id: 'n2', type: 'project', scope: 'reviewer', supersedes: 'never-existed' },
     body: 'x',
     now: '2026-09-16T00:00:00.000Z',
   });
@@ -429,20 +493,20 @@ t('readScope reads exactly one scope, never a sibling scope', () => {
   const root = tmpRoot();
   mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'r1', type: 'lesson', scope: 'reviewer' },
+    name: 'r1', description: 'd', metadata: { id: 'r1', type: 'feedback', scope: 'reviewer' },
     body: 'reviewer only', now: '2026-09-16T00:00:00.000Z',
   });
   mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'i1', type: 'lesson', scope: 'implementer' },
+    name: 'i1', description: 'd', metadata: { id: 'i1', type: 'feedback', scope: 'implementer' },
     body: 'implementer only', now: '2026-09-16T00:00:00.000Z',
   });
   const reviewer = mem.readScope(root, 'forge', 'reviewer');
   const impl = mem.readScope(root, 'forge', 'implementer');
-  assert.deepStrictEqual(reviewer.map((r) => r.frontmatter.id), ['r1']);
-  assert.deepStrictEqual(impl.map((r) => r.frontmatter.id), ['i1']);
+  assert.deepStrictEqual(reviewer.map((r) => r.frontmatter.metadata.id), ['r1']);
+  assert.deepStrictEqual(impl.map((r) => r.frontmatter.metadata.id), ['i1']);
   // A reviewer record must never be readable as an implementer record.
-  assert.ok(!impl.some((r) => r.frontmatter.id === 'r1'), 'cross-scope leak!');
+  assert.ok(!impl.some((r) => r.frontmatter.metadata.id === 'r1'), 'cross-scope leak!');
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -453,11 +517,11 @@ t('readScope skips MEMORY.md (index, not a record)', () => {
   fs.writeFileSync(path.join(dir, 'MEMORY.md'), '- [x](x.md) — index line\n');
   mem.writeRecord({
     root, plugin: 'forge', scope: 'explorer',
-    frontmatter: { id: 'e1', type: 'note', scope: 'explorer' },
+    name: 'e1', description: 'd', metadata: { id: 'e1', type: 'feedback', scope: 'explorer' },
     body: 'real record', now: '2026-09-16T00:00:00.000Z',
   });
   const recs = mem.readScope(root, 'forge', 'explorer');
-  assert.deepStrictEqual(recs.map((r) => r.frontmatter.id), ['e1']);
+  assert.deepStrictEqual(recs.map((r) => r.frontmatter.metadata.id), ['e1']);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -477,7 +541,7 @@ t('parseRecord on a file with no frontmatter returns it as body, malformed', () 
 });
 
 t('parseRecord on unterminated frontmatter does not throw', () => {
-  const parsed = mem.parseRecord('---\nid: x\ntype: note\n(no closing fence)\n');
+  const parsed = mem.parseRecord('---\nname: x\ndescription: d\n(no closing fence)\n');
   assert.strictEqual(parsed.malformed, true);
 });
 
@@ -494,7 +558,7 @@ t('readScope tolerates a malformed file among valid records', () => {
   fs.writeFileSync(path.join(dir, 'broken.md'), 'not a record at all');
   mem.writeRecord({
     root, plugin: 'forge', scope: 'doc-updater',
-    frontmatter: { id: 'ok1', type: 'note', scope: 'doc-updater' },
+    name: 'ok1', description: 'd', metadata: { id: 'ok1', type: 'feedback', scope: 'doc-updater' },
     body: 'fine', now: '2026-09-16T00:00:00.000Z',
   });
   const recs = mem.readScope(root, 'forge', 'doc-updater');
@@ -510,24 +574,51 @@ t('writeRecord refuses an invalid type (throws)', () => {
   const root = tmpRoot();
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'bad', type: 'goal', scope: 'implementer' },
+    name: 'bad', description: 'd', metadata: { id: 'bad', type: 'goal', scope: 'implementer' },
     body: 'x', now: '2026-09-16T00:00:00.000Z',
-  }), /type must be one of/);
+  }), /metadata\.type must be one of/);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('validateFrontmatter rejects a type outside the new D28.3 vocabulary', () => {
+  const problems = mem.validateFrontmatter({
+    name: 'n', description: 'd',
+    metadata: { id: 'x', type: 'lesson', scope: 's' }, // old vocabulary, no longer valid
+  });
+  assert.ok(problems.some((p) => /metadata\.type must be one of/.test(p)), problems.join(';'));
+  // Every member of the new vocabulary is accepted.
+  for (const type of mem.TYPES) {
+    const ok = mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type, scope: 's' } });
+    assert.deepStrictEqual(ok, [], `type ${type} should be valid: ${ok.join(';')}`);
+  }
+});
+
+t('validateFrontmatter rejects a missing name or description', () => {
+  const noName = mem.validateFrontmatter({ description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's' } });
+  assert.ok(noName.some((p) => /missing name/.test(p)), noName.join(';'));
+  const noDesc = mem.validateFrontmatter({ name: 'n', metadata: { id: 'x', type: 'feedback', scope: 's' } });
+  assert.ok(noDesc.some((p) => /missing description/.test(p)), noDesc.join(';'));
+  const emptyName = mem.validateFrontmatter({ name: '', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's' } });
+  assert.ok(emptyName.some((p) => /missing name/.test(p)), emptyName.join(';'));
+});
+
+t('validateFrontmatter rejects a missing metadata object', () => {
+  const problems = mem.validateFrontmatter({ name: 'n', description: 'd' });
+  assert.ok(problems.some((p) => /missing metadata/.test(p)), problems.join(';'));
 });
 
 t('writeRecord refuses a missing id (hook-safety contract)', () => {
   const root = tmpRoot();
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { type: 'feedback', scope: 'implementer' },
     body: 'x', now: '2026-09-16T00:00:00.000Z',
-  }), /id is required/);
+  }), /metadata\.id is required/);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 t('validateFrontmatter flags out-of-range importance', () => {
-  const problems = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', importance: 5 });
+  const problems = mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', importance: 5 } });
   assert.ok(problems.some((p) => /importance/.test(p)), problems.join(';'));
 });
 
@@ -563,16 +654,15 @@ t('migrateFile stamps the schema, is idempotent, and never touches real files (#
   assert.strictEqual(first.action, 'migrate');
   const afterFirst = fs.readFileSync(file, 'utf8');
   const fm = mem.parseRecord(afterFirst).frontmatter;
-  assert.ok(fm.id, 'id stamped');
-  assert.strictEqual(fm.tier, 'semantic');
-  assert.strictEqual(fm.type, 'lesson', 'metadata type:feedback -> lesson');
+  assert.ok(fm.metadata.id, 'id stamped');
+  assert.strictEqual(fm.metadata.tier, 'semantic');
+  assert.strictEqual(fm.metadata.type, 'feedback', 'metadata type:feedback carried through per D28.3 mapping');
   // pre-existing frontmatter + body preserved
   assert.ok(afterFirst.includes('name: sample'), afterFirst);
   assert.ok(afterFirst.includes('description: a pre-existing record'), afterFirst);
-  assert.ok(afterFirst.includes('type: feedback'), afterFirst);
   assert.ok(afterFirst.includes('Original body content.'), afterFirst);
 
-  // Re-run: a file that already has an id is a no-op, bytes identical.
+  // Re-run: a file that already has a metadata.id is a no-op, bytes identical.
   const second = migrate.migrateFile(file, 'forge', 'implementer', false);
   assert.strictEqual(second.action, 'skip');
   assert.strictEqual(fs.readFileSync(file, 'utf8'), afterFirst, 're-run must not churn');
@@ -610,13 +700,13 @@ t('writeRecord throws on an unsafe id instead of colliding (Copilot #1)', () => 
   // id 'a-b' — reject it instead of silently mangling it.
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'a/b', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'a/b', type: 'feedback', scope: 'implementer' },
     body: 'x', now: '2026-09-16T00:00:00.000Z',
   }), /unsafe record id/);
   // The distinct, SAFE id 'a-b' must write cleanly and not be affected.
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'a-b', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'a-b', type: 'feedback', scope: 'implementer' },
     body: 'safe write', now: '2026-09-16T00:00:00.000Z',
   });
   assert.ok(fs.existsSync(res.file));
@@ -629,7 +719,7 @@ t('writeRecord still accepts a normal UUID id (happy path unaffected)', () => {
   const id = mem.newId();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id, type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id, type: 'feedback', scope: 'implementer' },
     body: 'uuid record', now: '2026-09-16T00:00:00.000Z',
   });
   assert.ok(fs.existsSync(res.file));
@@ -641,7 +731,7 @@ t('writeRecord throws on an id ending in .md (ambiguous with recordFileName)', (
   const root = tmpRoot();
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'record.md', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'record.md', type: 'feedback', scope: 'implementer' },
     body: 'x', now: '2026-09-16T00:00:00.000Z',
   }), /unsafe record id/);
   fs.rmSync(root, { recursive: true, force: true });
@@ -662,7 +752,7 @@ t('a normal upsert still produces byte-identical on-disk content', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'atomic-1', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'atomic-1', type: 'feedback', scope: 'implementer' },
     body: 'stable body', now: '2026-09-16T00:00:00.000Z',
   });
   const onDisk = fs.readFileSync(res.file, 'utf8');
@@ -676,13 +766,13 @@ t('after a successful upsert no .tmp-* file remains in the scope dir', () => {
   const root = tmpRoot();
   mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'atomic-2', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'atomic-2', type: 'feedback', scope: 'implementer' },
     body: 'v1', now: '2026-09-16T00:00:00.000Z',
   });
   // Overwrite the same id (upsert) to exercise the tmp-write+rename path twice.
   mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'atomic-2', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'atomic-2', type: 'feedback', scope: 'implementer' },
     body: 'v2', now: '2026-09-16T01:00:00.000Z',
   });
   const dir = mem.scopeDir(root, 'forge', 'implementer');
@@ -698,7 +788,7 @@ t('overwriting an existing id replaces content correctly (no stale merge)', () =
   const root = tmpRoot();
   const write = (body) => mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'overwrite-1', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'overwrite-1', type: 'feedback', scope: 'implementer' },
     body, now: '2026-09-16T00:00:00.000Z',
   });
   write('first content');
@@ -719,7 +809,7 @@ t('writeRecord throws when the scope dir is a symlink escaping root', () => {
   try {
     assert.throws(() => mem.writeRecord({
       root, plugin: 'forge', scope: 'implementer',
-      frontmatter: { id: 'esc-1', type: 'note', scope: 'implementer' },
+      name: 'n', description: 'd', metadata: { id: 'esc-1', type: 'feedback', scope: 'implementer' },
       body: 'x', now: '2026-09-16T00:00:00.000Z',
     }), /escapes root/);
     // The outside dir must remain empty — nothing was written through the symlink.
@@ -734,7 +824,7 @@ t('a normal (non-symlinked) scope dir still writes fine', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'implementer',
-    frontmatter: { id: 'normal-1', type: 'note', scope: 'implementer' },
+    name: 'n', description: 'd', metadata: { id: 'normal-1', type: 'feedback', scope: 'implementer' },
     body: 'ordinary', now: '2026-09-16T00:00:00.000Z',
   });
   assert.ok(fs.existsSync(res.file));
@@ -747,9 +837,12 @@ t('readScope on a symlinked scope dir returns [] rather than throwing', () => {
   // Plant a real record OUTSIDE root, reachable only via the symlink.
   fs.writeFileSync(path.join(outside, 'sneaky.md'), [
     '---',
-    'id: sneaky',
-    'type: note',
-    'scope: reviewer',
+    'name: sneaky',
+    'description: d',
+    'metadata:',
+    '  id: sneaky',
+    '  type: feedback',
+    '  scope: reviewer',
     '---',
     '',
     'should not be surfaced',
@@ -765,21 +858,21 @@ t('readScope on a symlinked scope dir returns [] rather than throwing', () => {
 });
 
 // --- forge:reviewer finding #1 (SECURITY): frontmatter injection via a
-// multiline `extra` string -------------------------------------------------
+// multiline `extra` string, `description`, or `metadata` value ------------
 
 t('a multiline extra value cannot forge a sibling id: line (frontmatter injection)', () => {
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'inj-1', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'inj-1', type: 'feedback', scope: 'reviewer' },
     body: 'clean body',
     extra: { note: 'hello\nid: evil' },
     now: '2026-09-16T00:00:00.000Z',
   });
   const onDisk = fs.readFileSync(res.file, 'utf8');
   const parsed = mem.parseRecord(onDisk);
-  assert.strictEqual(parsed.frontmatter.id, 'inj-1', onDisk);
-  assert.notStrictEqual(parsed.frontmatter.id, 'evil');
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'inj-1', onDisk);
+  assert.notStrictEqual(parsed.frontmatter.metadata.id, 'evil');
   assert.strictEqual(parsed.extra.note, 'hello\nid: evil', 'note must round-trip to its original value');
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -788,7 +881,7 @@ t('a multiline extra value cannot plant an early --- fence (frontmatter injectio
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'inj-2', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'inj-2', type: 'feedback', scope: 'reviewer' },
     body: 'original body must survive',
     extra: { note: 'x\n---\nplanted body' },
     now: '2026-09-16T00:00:00.000Z',
@@ -796,8 +889,42 @@ t('a multiline extra value cannot plant an early --- fence (frontmatter injectio
   const onDisk = fs.readFileSync(res.file, 'utf8');
   const parsed = mem.parseRecord(onDisk);
   assert.strictEqual(parsed.malformed, false, onDisk);
-  assert.strictEqual(parsed.frontmatter.id, 'inj-2', onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'inj-2', onDisk);
   assert.strictEqual(parsed.extra.note, 'x\n---\nplanted body');
+  assert.ok(parsed.body.includes('original body must survive'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a multiline description value cannot forge a sibling id: line (frontmatter injection)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'hello\nid: evil',
+    metadata: { id: 'inj-3', type: 'feedback', scope: 'reviewer' },
+    body: 'clean body',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'inj-3', onDisk);
+  assert.strictEqual(parsed.frontmatter.description, 'hello\nid: evil');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a multiline metadata value cannot plant an early --- fence (frontmatter injection)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    name: 'n', description: 'd',
+    metadata: { id: 'inj-4', type: 'feedback', scope: 'reviewer', created: 'x\n---\nplanted body' },
+    body: 'original body must survive',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.malformed, false, onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.id, 'inj-4', onDisk);
+  assert.strictEqual(parsed.frontmatter.metadata.created, 'x\n---\nplanted body');
   assert.ok(parsed.body.includes('original body must survive'), onDisk);
   fs.rmSync(root, { recursive: true, force: true });
 });
@@ -805,12 +932,12 @@ t('a multiline extra value cannot plant an early --- fence (frontmatter injectio
 t('the existing indented metadata: block still round-trips byte-stable (safe verbatim shape unaffected)', () => {
   const src = [
     '---',
-    'id: safe-block-1',
-    'type: note',
-    'scope: reviewer',
-    'name: some-name',
+    'name: safe-block-1',
+    'description: d',
     'metadata:',
     '  type: feedback',
+    '  scope: reviewer',
+    '  id: safe-block-1',
     '  level: 3',
     '---',
     '',
@@ -827,7 +954,7 @@ t('writeRecord does not scrub the id even when it matches a redaction shape (bug
   const root = tmpRoot();
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'sk-1-lessons-about-review', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'sk-1-lessons-about-review', type: 'feedback', scope: 'reviewer' },
     body: 'clean',
     now: '2026-09-16T00:00:00.000Z',
   });
@@ -847,8 +974,9 @@ t('writeRecord throws on a path-traversal supersedes in frontmatter, moves nothi
   try {
     assert.throws(() => mem.writeRecord({
       root, plugin: 'forge', scope: 'reviewer',
-      frontmatter: {
-        id: 'sup-1', type: 'note', scope: 'reviewer',
+      name: 'n', description: 'd',
+      metadata: {
+        id: 'sup-1', type: 'feedback', scope: 'reviewer',
         supersedes: '../../../etc/passwd',
       },
       body: 'x', now: '2026-09-16T00:00:00.000Z',
@@ -865,7 +993,7 @@ t('writeRecord throws on a path-traversal opts.supersedesId', () => {
   const root = tmpRoot();
   assert.throws(() => mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'sup-2', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'sup-2', type: 'feedback', scope: 'reviewer' },
     supersedesId: '../../evil',
     body: 'x', now: '2026-09-16T00:00:00.000Z',
   }), /unsafe supersedes id/);
@@ -876,12 +1004,12 @@ t('a normal supersede of a real in-scope id still archives correctly (regression
   const root = tmpRoot();
   mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'ok-old', type: 'fact', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'ok-old', type: 'project', scope: 'reviewer' },
     body: 'v0', now: '2026-09-16T00:00:00.000Z',
   });
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'ok-new', type: 'fact', scope: 'reviewer', supersedes: 'ok-old' },
+    name: 'n', description: 'd', metadata: { id: 'ok-new', type: 'project', scope: 'reviewer', supersedes: 'ok-old' },
     body: 'v1', now: '2026-09-16T01:00:00.000Z',
   });
   assert.ok(res.archived, 'expected an archive path');
@@ -897,16 +1025,19 @@ t('readScope skips a symlinked record file pointing outside the scope dir', () =
   const outsideFile = path.join(outside, 'external.md');
   fs.writeFileSync(outsideFile, [
     '---',
-    'id: external',
-    'type: note',
-    'scope: reviewer',
+    'name: external',
+    'description: d',
+    'metadata:',
+    '  id: external',
+    '  type: feedback',
+    '  scope: reviewer',
     '---',
     '',
     'external content, must not be surfaced',
   ].join('\n'));
   const res = mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'real-1', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'real-1', type: 'feedback', scope: 'reviewer' },
     body: 'real record', now: '2026-09-16T00:00:00.000Z',
   });
   const dir = path.dirname(res.file);
@@ -914,7 +1045,7 @@ t('readScope skips a symlinked record file pointing outside the scope dir', () =
   fs.symlinkSync(outsideFile, linkPath, 'file');
   try {
     const recs = mem.readScope(root, 'forge', 'reviewer');
-    assert.deepStrictEqual(recs.map((r) => r.frontmatter.id), ['real-1'], JSON.stringify(recs.map((r) => r.frontmatter.id)));
+    assert.deepStrictEqual(recs.map((r) => r.frontmatter.metadata.id), ['real-1'], JSON.stringify(recs.map((r) => r.frontmatter.metadata.id)));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
@@ -940,9 +1071,12 @@ t('a leading-zero frontmatter/extra value round-trips byte-stable', () => {
   // from then on: parse -> serialize -> parse yields the same value forever.
   const src = [
     '---',
-    'id: lz-1',
-    'type: note',
-    'scope: reviewer',
+    'name: lz-1',
+    'description: d',
+    'metadata:',
+    '  id: lz-1',
+    '  type: feedback',
+    '  scope: reviewer',
     'code: 007',
     '---',
     '',
@@ -957,32 +1091,54 @@ t('a leading-zero frontmatter/extra value round-trips byte-stable', () => {
   assert.strictEqual(mem.serializeRecord(reparsed), out);
 });
 
+t('a leading-zero metadata sub-value round-trips byte-stable', () => {
+  const src = [
+    '---',
+    'name: lz-2',
+    'description: d',
+    'metadata:',
+    '  id: lz-2',
+    '  type: feedback',
+    '  scope: reviewer',
+    '  code: 007',
+    '---',
+    '',
+    'body',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  assert.strictEqual(parsed.frontmatter.metadata.code, '007', JSON.stringify(parsed.frontmatter.metadata));
+  const out = mem.serializeRecord(parsed);
+  const reparsed = mem.parseRecord(out);
+  assert.strictEqual(reparsed.frontmatter.metadata.code, '007', JSON.stringify(reparsed.frontmatter.metadata));
+  assert.strictEqual(mem.serializeRecord(reparsed), out);
+});
+
 // --- forge:reviewer finding (task 4): deterministic read order -------------
 
 t('readScope returns records in sorted filename order', () => {
   const root = tmpRoot();
   mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'zzz-last', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'zzz-last', type: 'feedback', scope: 'reviewer' },
     body: 'z', now: '2026-09-16T00:00:00.000Z',
   });
   mem.writeRecord({
     root, plugin: 'forge', scope: 'reviewer',
-    frontmatter: { id: 'aaa-first', type: 'note', scope: 'reviewer' },
+    name: 'n', description: 'd', metadata: { id: 'aaa-first', type: 'feedback', scope: 'reviewer' },
     body: 'a', now: '2026-09-16T00:00:00.000Z',
   });
   const recs = mem.readScope(root, 'forge', 'reviewer');
-  assert.deepStrictEqual(recs.map((r) => r.frontmatter.id), ['aaa-first', 'zzz-last']);
+  assert.deepStrictEqual(recs.map((r) => r.frontmatter.metadata.id), ['aaa-first', 'zzz-last']);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 // --- forge:reviewer finding (task 5): reject negative uses -----------------
 
 t('validateFrontmatter rejects a negative uses count', () => {
-  const problems = mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: -1 });
-  assert.ok(problems.some((p) => /uses must be a non-negative integer/.test(p)), problems.join(';'));
-  assert.deepStrictEqual(mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: 0 }), []);
-  assert.deepStrictEqual(mem.validateFrontmatter({ id: 'x', type: 'note', scope: 's', uses: 3 }), []);
+  const problems = mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', uses: -1 } });
+  assert.ok(problems.some((p) => /metadata\.uses must be a non-negative integer/.test(p)), problems.join(';'));
+  assert.deepStrictEqual(mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', uses: 0 } }), []);
+  assert.deepStrictEqual(mem.validateFrontmatter({ name: 'n', description: 'd', metadata: { id: 'x', type: 'feedback', scope: 's', uses: 3 } }), []);
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);
