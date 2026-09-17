@@ -2,12 +2,12 @@
 // Shared secret/PII scrubber for forge hooks. Node stdlib only (D11): no npm
 // deps, no Date.now()/Math.random() (this module calls neither).
 //
-// Salvaged verbatim from the memory-v2 record library
-// (plugins/forge/hooks/lib/memory.js, docs/plans/memory-v2.md unit 1, §4) so
-// the same hardened patterns back BOTH the retired custom storage engine's
-// write path and this hook's on-disk rescrub of native
-// `.claude/agent-memory/**` writes (D28.4). If one changes, consider whether
-// the other should too — they exist to catch the same shapes of secret.
+// Salvaged from the memory-v2 custom storage engine's record library (the
+// hardened redaction patterns that engine's write path used), which has
+// since been superseded by native Claude Code subagent memory. Those same
+// patterns now back memory-redact.js's on-disk rescrub of native
+// `.claude/agent-memory/**` and `.claude/agent-memory-local/**` writes
+// (D28.4).
 //
 // A stdlib pattern safety-net, NOT a guarantee. A bare high-entropy string with
 // no recognizable prefix/shape can slip through — this is documented honestly
@@ -56,7 +56,10 @@ const REDACTION_PATTERNS = [
   },
   // *_SECRET= / *_TOKEN= / *_KEY= / *_PASSWORD= assignment forms. The keyword
   // (the LHS + `=`) is preserved so the record still reads sensibly; only the
-  // value is scrubbed.
+  // value is scrubbed. The surrounding quote (group 2, if any) is captured so
+  // it can be re-emitted on BOTH sides of the placeholder — dropping it would
+  // turn `FOO_SECRET="abc"` into the malformed `FOO_SECRET=[REDACTED:...]"`
+  // (an orphaned trailing quote) instead of `FOO_SECRET="[REDACTED:...]"`.
   {
     // The `(?!\[REDACTED:)` guard stops this (broad) pattern from re-redacting a
     // value an EARLIER, more-specific pattern already replaced (e.g. a
@@ -64,10 +67,14 @@ const REDACTION_PATTERNS = [
     // specific kind label is lost and `redactions` double-counts one secret.
     kind: 'secret-assignment',
     re: /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Za-z0-9_]*\s*[=:]\s*)("?)(?!\[REDACTED:)([^\s"']{6,})\2/gi,
-    replace: (m, kw) => `${kw}[REDACTED:secret-assignment]`,
+    replace: (m, kw, quote) => `${kw}${quote}[REDACTED:secret-assignment]${quote}`,
   },
 ];
 
+// Unused by memory-redact.js today (it only needs scrubSecrets + the
+// patterns) — retained for the not-yet-built adoption-migration unit
+// (D28.4 unit 4), which will need to scrub structured/frontmatter values and
+// surface this caveat to whatever it writes.
 const REDACTION_CAVEAT =
   'Redaction is a stdlib pattern safety-net, not a guarantee: a bare ' +
   'high-entropy string with no recognizable prefix can slip through.';
@@ -88,7 +95,8 @@ function scrubSecrets(input) {
 
 // Recursively scrub every string in a JSON-ish value, pushing each redaction
 // into `redactions`. Kept alongside scrubSecrets for callers that need to
-// scrub a parsed structure (e.g. frontmatter) rather than raw file text.
+// scrub a parsed structure (e.g. frontmatter) rather than raw file text —
+// see the D28.4 unit 4 note on REDACTION_CAVEAT above; no current caller.
 function scrubValueDeep(value, redactions) {
   if (typeof value === 'string') {
     const r = scrubSecrets(value);

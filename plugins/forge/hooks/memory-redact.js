@@ -20,8 +20,22 @@
 // synchronous hook invocation, not a background job.
 //
 // Scope is deliberately narrow and defensive: only Write/Edit/MultiEdit,
-// only a path under .claude/agent-memory/ (any depth), only a `.md` file
-// (the only shape native memory writes). Anything else is left untouched.
+// only a path under .claude/agent-memory/ or .claude/agent-memory-local/ (any
+// depth — native writes project-scope memory to the former and local-scope
+// memory, gitignored, to the latter; both need the same scrub), only a `.md`
+// file (the only shape native memory writes). Anything else is left
+// untouched.
+//
+// The containment test resolves the target to a real absolute path FIRST
+// (path.resolve, which collapses `..` and mixed separators) and then checks
+// containment with path.relative against each memory root — mirroring the
+// anchored style of guards/user-level-write.js / guards/worktree-commit.js —
+// rather than testing a regex or doing an unanchored string replace/prefix
+// check against the raw, possibly-relative path. A non-normalized check here
+// is a security gap in both directions: a real agent-memory write that spells
+// its path with a `..` segment could evade the scrub, and a path merely
+// starting with the same characters outside the tree could be mistaken for
+// one inside it.
 //
 // Fails open on every error: a hook must never crash or block a session, and
 // this one additionally must never be the reason a legitimate memory write is
@@ -33,23 +47,49 @@ const io = require('./lib/io');
 const cfg = require('./lib/config');
 const redact = require('./lib/redact');
 
-const MEMORY_DIR_RE = /(^|\/)\.claude\/agent-memory\//;
+// Cap the file we'll read/scrub/write: this hook runs synchronously inside
+// the session (D28.4 design note above), and the secret-assignment pattern's
+// backtracking cost grows with input size, so an unbounded file could stall a
+// turn. Legitimate agent-memory notes are nowhere near this size; a file this
+// large under agent-memory is almost certainly not one this hook should be
+// touching in-band.
+const MAX_SCRUB_BYTES = 512 * 1024;
 
-// Resolves tool_input's file path against the project dir the same way
-// guards/user-level-write.js does for Edit/Write/MultiEdit: normalize
-// backslashes (D13), then join onto projectDir only when the path is not
-// already absolute.
+const MEMORY_SUBDIRS = ['.claude/agent-memory', '.claude/agent-memory-local'];
+
+// Resolves tool_input's file path to a real absolute path: normalize
+// backslashes (D13), join onto the resolved project dir when relative, then
+// path.resolve so any `..` segments are actually collapsed rather than left
+// in the string for a later substring/prefix check to be fooled by.
 function resolvePath(filePath, projectDir) {
   const norm = String(filePath || '').replace(/\\/g, '/');
   if (!norm) return null;
-  if (path.posix.isAbsolute(norm) || /^[A-Za-z]:\//.test(norm)) return norm;
-  if (!projectDir) return null;
-  return path.posix.join(String(projectDir).replace(/\\/g, '/'), norm);
+  const joined = path.posix.isAbsolute(norm) || /^[A-Za-z]:\//.test(norm)
+    ? norm
+    : projectDir
+      ? path.posix.join(String(projectDir).replace(/\\/g, '/'), norm)
+      : null;
+  if (!joined) return null;
+  return path.resolve(joined).replace(/\\/g, '/');
 }
 
-function isAgentMemoryMarkdown(absPath) {
-  const norm = String(absPath || '').replace(/\\/g, '/');
-  return MEMORY_DIR_RE.test(norm) && norm.endsWith('.md');
+// True when `absPath` (already resolved by resolvePath) is genuinely inside
+// one of MEMORY_SUBDIRS under `projectDir`, and ends in .md. Containment is
+// path.relative(root, absPath): anything that starts with `..` or is itself
+// absolute means absPath escaped root (or was never inside it), never a
+// string prefix/regex test on the unresolved path.
+function isAgentMemoryMarkdown(absPath, projectDir) {
+  if (!absPath || !absPath.endsWith('.md')) return false;
+  if (!projectDir) return false;
+  const proj = path.resolve(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/');
+  for (const sub of MEMORY_SUBDIRS) {
+    const root = path.resolve(proj, sub).replace(/\\/g, '/');
+    const rel = path.relative(root, absPath).replace(/\\/g, '/');
+    if (rel === '') continue; // absPath IS the root dir itself, not a file in it
+    if (rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) continue;
+    return true;
+  }
+  return false;
 }
 
 function main() {
@@ -64,7 +104,15 @@ function main() {
   const projectDir = cfg.projectDir(payload);
   const absPath = resolvePath(filePath, projectDir);
   if (!absPath) return;
-  if (!isAgentMemoryMarkdown(absPath)) return;
+  if (!isAgentMemoryMarkdown(absPath, projectDir)) return;
+
+  let stat;
+  try {
+    stat = fs.statSync(absPath);
+  } catch (e) {
+    return; // file missing/unreadable: nothing to scrub, fail open
+  }
+  if (stat.size > MAX_SCRUB_BYTES) return; // too large to scrub in-session; see MAX_SCRUB_BYTES above
 
   let original;
   try {
@@ -83,10 +131,11 @@ function main() {
   for (const r of redactions) counts[r.kind] = (counts[r.kind] || 0) + 1;
   // Repo-relative path only (never the secret, never a full machine path):
   // matches the D10 telemetry norm of logging what was affected, not what
-  // was in it.
-  const projRel = projectDir
-    ? absPath.replace(String(projectDir).replace(/\\/g, '/') + '/', '')
-    : absPath;
+  // was in it. Anchored path.relative, not an unanchored string replace, so
+  // this can't produce a bogus relative path if absPath merely happens to
+  // start with the same characters as projectDir without truly being inside it.
+  const proj = projectDir ? path.resolve(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/') : null;
+  const projRel = proj ? path.relative(proj, absPath).replace(/\\/g, '/') : absPath;
   io.telemetry(dataDir, {
     event: 'memory_redacted',
     session_id: payload.session_id || null,
