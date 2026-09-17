@@ -263,5 +263,116 @@ t('a repo with no .claude/agent-memory at all is a clean no-op', () => {
   assert.match(r.stdout, /nothing to migrate/);
 });
 
+t('one scope with a containment-violating planted symlink does not abort the whole run', () => {
+  // Two scopes: forge-implementer (good, non-native record to migrate) and
+  // forge-poisoned (its _pre-migration archive destination is hijacked by a
+  // symlink pointing OUTSIDE the repo root). resolveInside must reject the
+  // poisoned file's archive path, but that rejection must be reported as a
+  // structured per-file error and NOT prevent the good scope from migrating.
+  const dir = buildFixture();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-memmigrate-outside-'));
+  write(dir, '.claude/agent-memory/forge-poisoned/bad.md', '# A poisoned lesson\n\nSome content.\n');
+  // Plant ONLY this scope's archive subdirectory as a symlink escaping the
+  // repo (not the shared `_pre-migration` root itself, which the good scope
+  // also archives under) — so only forge-poisoned's archive path resolves
+  // outside the repository root; forge-implementer's archive path is
+  // unaffected.
+  fs.mkdirSync(path.join(dir, '.claude/agent-memory/_pre-migration'), { recursive: true });
+  fs.symlinkSync(outside, path.join(dir, '.claude/agent-memory/_pre-migration/forge-poisoned'));
+
+  const r = run(dir);
+  assert.strictEqual(r.status, 1, `expected a non-zero exit because of the errored file; stderr: ${r.stderr}`);
+  assert.match(r.stderr, /ERROR forge-poisoned[/\\]bad\.md:.*outside the repository/);
+  assert.match(r.stdout, /2 migrated, 1 skipped, 1 errored/);
+
+  // The good scope still migrated despite the other scope's poisoned file.
+  const engine = require('../lib/memory-migrate');
+  const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
+  const plainParsed = engine.parseRecord(fs.readFileSync(plainPath, 'utf8'));
+  assert.ok(engine.isNativeRecord(plainParsed.frontmatter), 'the good scope must still be migrated to a native record');
+  const flatPath = path.join(dir, '.claude/agent-memory/forge-implementer/flat.md');
+  const flatParsed = engine.parseRecord(fs.readFileSync(flatPath, 'utf8'));
+  assert.ok(engine.isNativeRecord(flatParsed.frontmatter), 'the good scope must still be migrated to a native record');
+
+  // The poisoned file itself is left in place, unmigrated (never archived,
+  // never overwritten) since the archive step failed before the write.
+  const poisonedPath = path.join(dir, '.claude/agent-memory/forge-poisoned/bad.md');
+  assert.match(fs.readFileSync(poisonedPath, 'utf8'), /A poisoned lesson/);
+});
+
+t('yamlScalar/parseScalar round-trip a value containing an embedded newline byte-stable', () => {
+  const engine = require('../lib/memory-migrate');
+  const record = {
+    name: 'multi-line\nname value',
+    description: 'line one\nline two\r\nline three',
+    metadata: { type: 'project', scope: 'implementer', id: '22222222-2222-2222-2222-222222222222', note: 'a\nb' },
+    body: 'Body text.\n',
+  };
+  const serialized = engine.serializeRecord(record);
+  // The serialized frontmatter must stay strictly line-based: no raw
+  // newline/carriage-return byte inside any quoted scalar's own line.
+  const fmBlock = serialized.slice(4, serialized.indexOf('\n---', 4));
+  for (const line of fmBlock.split('\n')) {
+    assert.ok(!/\r/.test(line), `frontmatter line must not contain a raw CR: ${JSON.stringify(line)}`);
+  }
+  const parsed = engine.parseRecord(serialized);
+  assert.strictEqual(parsed.frontmatter.name, record.name);
+  assert.strictEqual(parsed.frontmatter.description, record.description);
+  assert.strictEqual(parsed.frontmatter.metadata.note, record.metadata.note);
+  assert.strictEqual(parsed.frontmatter.metadata.type, record.metadata.type);
+  assert.strictEqual(parsed.frontmatter.metadata.id, record.metadata.id);
+});
+
+t('a literal two-character backslash-n round-trips correctly (never misread as an escaped newline)', () => {
+  const engine = require('../lib/memory-migrate');
+  const literal = 'path is C:\\notes\\readme and a real\nnewline too';
+  const record = {
+    name: 'literal-backslash-n',
+    description: literal,
+    metadata: { type: 'project', scope: 'implementer', id: '33333333-3333-3333-3333-333333333333' },
+    body: 'Body.\n',
+  };
+  const serialized = engine.serializeRecord(record);
+  const parsed = engine.parseRecord(serialized);
+  assert.strictEqual(parsed.frontmatter.description, literal);
+});
+
+t('MEMORY.md dedup regex ignores a ](other.md) link embedded in hook prose', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  // A pre-existing index entry whose OWN hook/description text happens to
+  // contain a markdown-link-shaped substring pointing at a DIFFERENT file.
+  // The dedup regex must only look at the entry's own leading link, so it
+  // must not mistake "other.md" for an indexed file and must not skip
+  // re-indexing "real.md" below.
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/MEMORY.md',
+    '- [existing](existing.md) — see also [a note](other.md) for background\n'
+  );
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/real.md',
+    [
+      '---',
+      'name: real-record',
+      'description: A real migrated record',
+      'metadata:',
+      '  type: project',
+      '  id: 44444444-4444-4444-4444-444444444444',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, ['real.md']);
+  assert.strictEqual(result.changed, true, 'real.md must be indexed, not skipped as a false dedup hit');
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  assert.match(index, /\(real\.md\)/);
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

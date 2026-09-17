@@ -124,7 +124,22 @@ function parseScalar(raw) {
   if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
   if (v === 'true') return true;
   if (v === 'false') return false;
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+  if (v.startsWith('"') && v.endsWith('"')) {
+    const inner = v.slice(1, -1);
+    // True inverse of yamlScalar's double-quote escaping: a single pass over
+    // the full escape set so a LITERAL two-character `\n` in the source
+    // (backslash followed by the letter n, as opposed to an escaped real
+    // newline) is never misread as an escaped newline, and vice versa. Order
+    // inside the character class doesn't matter here because the match is on
+    // the escape marker (backslash + one of these four characters), not on
+    // the characters standing alone.
+    return inner.replace(/\\(["\\nr])/g, (_, c) => {
+      if (c === 'n') return '\n';
+      if (c === 'r') return '\r';
+      return c; // \" -> " , \\ -> \
+    });
+  }
+  if (v.startsWith("'") && v.endsWith("'")) {
     return v.slice(1, -1);
   }
   return v;
@@ -196,7 +211,15 @@ function yamlScalar(v) {
   // parser above (leading/trailing space, a colon+space inside the value, a
   // line break, a leading quote/dash/hash).
   if (/^\s|\s$|:\s|\n|^['"#-]/.test(s) || s === '') {
-    return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    // Order matters: escape backslashes first (so the backslashes this step
+    // introduces for \n/\r below aren't themselves re-escaped), then quotes,
+    // then the actual line-break characters — keeping the whole scalar on
+    // ONE physical line so the line-based parser above can read it back.
+    return `"${s
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')}"`;
   }
   return s;
 }
@@ -371,7 +394,12 @@ function buildMemoryIndex(scopeDir, recordFiles) {
   }
   const indexedFiles = new Set();
   for (const line of existingLines) {
-    const m = /\]\(([^)]+\.md)\)/.exec(line);
+    // Anchored to the entry's OWN leading link (`- [title](file.md)` at the
+    // start of the line, only whitespace before it) so a `](other.md)`-shaped
+    // link inside human-authored hook/description prose later in the same
+    // line can never register as an indexed filename and mask a real record
+    // from being (re-)indexed.
+    const m = /^\s*-\s*\[[^\]]*\]\(([^)]+\.md)\)/.exec(line);
     if (m) indexedFiles.add(m[1]);
   }
   const newLines = [];
@@ -452,10 +480,20 @@ function migrateScopeDir(root, dirName, opts) {
     const serialized = serializeRecord(record);
 
     if (!opts.dryRun) {
-      const archiveRel = path.join(AGENT_MEMORY_DIRNAME, PRE_MIGRATION_DIRNAME, dirName, name);
-      const archiveAbs = resolveInside(root, archiveRel);
-      archiveOriginal(full, archiveAbs);
-      writeFileAtomic(full, serialized);
+      // A path-containment violation (e.g. a planted symlink escaping the
+      // archive root) or any other archive/write failure must be reported
+      // and skipped, never fatal to the rest of the run — one poisoned file
+      // should not abort migration of every other scope. Mirrors the
+      // isValidSegment error path above: push a structured error and move on.
+      try {
+        const archiveRel = path.join(AGENT_MEMORY_DIRNAME, PRE_MIGRATION_DIRNAME, dirName, name);
+        const archiveAbs = resolveInside(root, archiveRel);
+        archiveOriginal(full, archiveAbs);
+        writeFileAtomic(full, serialized);
+      } catch (e) {
+        results.push({ file: path.join(dirName, name), action: 'error', reason: e.message });
+        continue;
+      }
     }
     recordFilesForIndex.push(name);
     results.push({
