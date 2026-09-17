@@ -764,5 +764,79 @@ t('readScope on a symlinked scope dir returns [] rather than throwing', () => {
   }
 });
 
+// --- forge:reviewer finding #1 (SECURITY): frontmatter injection via a
+// multiline `extra` string -------------------------------------------------
+
+t('a multiline extra value cannot forge a sibling id: line (frontmatter injection)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'inj-1', type: 'note', scope: 'reviewer' },
+    body: 'clean body',
+    extra: { note: 'hello\nid: evil' },
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.frontmatter.id, 'inj-1', onDisk);
+  assert.notStrictEqual(parsed.frontmatter.id, 'evil');
+  assert.strictEqual(parsed.extra.note, 'hello\nid: evil', 'note must round-trip to its original value');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('a multiline extra value cannot plant an early --- fence (frontmatter injection)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'inj-2', type: 'note', scope: 'reviewer' },
+    body: 'original body must survive',
+    extra: { note: 'x\n---\nplanted body' },
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  const parsed = mem.parseRecord(onDisk);
+  assert.strictEqual(parsed.malformed, false, onDisk);
+  assert.strictEqual(parsed.frontmatter.id, 'inj-2', onDisk);
+  assert.strictEqual(parsed.extra.note, 'x\n---\nplanted body');
+  assert.ok(parsed.body.includes('original body must survive'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+t('the existing indented metadata: block still round-trips byte-stable (safe verbatim shape unaffected)', () => {
+  const src = [
+    '---',
+    'id: safe-block-1',
+    'type: note',
+    'scope: reviewer',
+    'name: some-name',
+    'metadata:',
+    '  type: feedback',
+    '  level: 3',
+    '---',
+    '',
+    'body here',
+  ].join('\n');
+  const parsed = mem.parseRecord(src);
+  const out = mem.serializeRecord(parsed);
+  assert.strictEqual(out, src, `round-trip mismatch:\n---got---\n${out}\n---want---\n${src}`);
+});
+
+// --- forge:reviewer finding #2 (BUG): id re-scrubbed after isSafeId -------
+
+t('writeRecord does not scrub the id even when it matches a redaction shape (bug #2)', () => {
+  const root = tmpRoot();
+  const res = mem.writeRecord({
+    root, plugin: 'forge', scope: 'reviewer',
+    frontmatter: { id: 'sk-1-lessons-about-review', type: 'note', scope: 'reviewer' },
+    body: 'clean',
+    now: '2026-09-16T00:00:00.000Z',
+  });
+  assert.strictEqual(path.basename(res.file), 'sk-1-lessons-about-review.md', res.file);
+  const onDisk = fs.readFileSync(res.file, 'utf8');
+  assert.ok(onDisk.includes('id: sk-1-lessons-about-review'), onDisk);
+  assert.ok(!onDisk.includes('[REDACTED'), onDisk);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

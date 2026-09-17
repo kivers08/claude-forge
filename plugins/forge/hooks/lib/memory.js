@@ -148,10 +148,18 @@ function parseScalar(raw) {
   if (v === 'true') return true;
   if (v === 'false') return false;
   // Quoted string: strip the quotes. For double-quoted values invert
-  // serializeScalar's escaping (\\ and \") so parse is a true inverse of
-  // serialize; single-quoted values are taken literally.
+  // serializeScalar's escaping (\\, \", \n, \r) so parse is a true inverse of
+  // serialize; single-quoted values are taken literally. A single regex pass
+  // over the full escape alphabet (rather than independent String#replace
+  // calls per escape) is required so a literal backslash immediately
+  // followed by an `n`/`r`/quote in the SOURCE text is never reinterpreted:
+  // each match consumes exactly one backslash plus its one escaped char, left
+  // to right, so a run like `\\n` (escaped backslash, then literal `n`) can
+  // never be mis-read as `\n` (escaped newline).
   if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
-    return v.slice(1, -1).replace(/\\(["\\])/g, '$1');
+    return v.slice(1, -1).replace(/\\(["\\nr])/g, (_, c) => (
+      c === 'n' ? '\n' : c === 'r' ? '\r' : c
+    ));
   }
   if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
     return v.slice(1, -1);
@@ -164,13 +172,17 @@ function parseScalar(raw) {
 
 // A scalar needs quoting if it could be misread on parse (looks like a bool/
 // null/number, is empty, or contains a leading/trailing space or a colon-space
-// that would confuse the key:value split).
+// that would confuse the key:value split), OR contains a newline/CR — a raw
+// newline would otherwise split a single field into extra "lines" that could
+// forge a sibling frontmatter key or a `---` fence (frontmatter injection);
+// quoting+escaping keeps it a single physical line.
 function needsQuote(v) {
   if (v === '') return true;
   if (/^(null|~|true|false)$/.test(v)) return true;
   if (/^-?\d+(\.\d+)?$/.test(v)) return true;
   if (/^[\s]|[\s]$/.test(v)) return true;
   if (/[:#]/.test(v)) return true;
+  if (/[\n\r]/.test(v)) return true;
   // A value beginning with a YAML indicator char (block seq `-`, flow
   // collections, anchors/aliases, tags, block/quote scalars, directives) is
   // mis-parsed or invalid when written bare in a file a real YAML reader sees.
@@ -184,7 +196,14 @@ function serializeScalar(v) {
   if (typeof v === 'number') return String(v);
   const s = String(v);
   if (needsQuote(s)) {
-    return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    // Escape order matters: backslash FIRST, so the backslashes introduced by
+    // the \n/\r escaping below are never themselves re-escaped.
+    const escaped = s
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r');
+    return '"' + escaped + '"';
   }
   return s;
 }
@@ -280,10 +299,33 @@ function serializeRecord(record) {
   return out.join('\n') + '\n' + body;
 }
 
+// A multiline string is safe to emit VERBATIM as an indented block only if it
+// is provably the shape parseRecord's continuation branch produces: EVERY
+// continuation line (the head line's own newline-free by construction — see
+// callers, which split on '\n') is already indented (`/^\s+\S/`) and none,
+// once trimmed, is a bare `---` fence. Anything else (arbitrary
+// caller-supplied text, e.g. unit 3's model-produced `extra` values) must NOT
+// take this path — an unindented continuation line would forge a sibling
+// frontmatter key (e.g. smuggling a second `id:` that overwrites the real one
+// on re-parse), and an indented `---` line still closes parseRecord's
+// frontmatter block early (parseRecord checks `lines[i].trim() === '---'`),
+// planting body content.
+function isSafeVerbatimBlock(rest) {
+  for (const line of rest) {
+    if (!/^\s+\S/.test(line)) return false;
+    if (line.trim() === '---') return false;
+  }
+  return true;
+}
+
 // Serialize one field. Handles three shapes an `extra` value can take (schema
 // fields are always scalar):
-//   * a multiline STRING preserved verbatim as an indented block (migration's
-//     `metadata:` + children, captured by parseRecord's continuation branch);
+//   * a multiline STRING that is PROVABLY the verbatim indented-block shape
+//     parseRecord's continuation branch produces (migration's `metadata:` +
+//     children) — preserved verbatim as an indented block;
+//   * any OTHER multiline string — emitted as a single-line double-quoted
+//     scalar (serializeScalar escapes \n/\r), since it did not come from
+//     parseRecord and cannot be trusted to already be safely indented/fenced;
 //   * a nested MAP (one level) — emitted as the `key:` header + `  child: val`
 //     lines, exactly the block form parseRecord round-trips back into a string;
 //   * an ARRAY — emitted as `key:` + `  - item` lines (YAML block sequence).
@@ -291,11 +333,16 @@ function serializeRecord(record) {
 // `[object Object]`, String(arr) drops structure) — that silently loses data.
 function serializeField(key, value) {
   if (typeof value === 'string' && value.includes('\n')) {
-    // Multiline preserved block: first physical line is this key's own value,
-    // the rest are already-indented child lines captured on parse.
     const [head, ...rest] = value.split('\n');
-    const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
-    return [headOut, ...rest].join('\n');
+    if (isSafeVerbatimBlock(rest)) {
+      // Multiline preserved block: first physical line is this key's own
+      // value, the rest are already-indented child lines captured on parse.
+      const headOut = head === '' ? `${key}:` : `${key}: ${serializeScalar(head)}`;
+      return [headOut, ...rest].join('\n');
+    }
+    // Not provably safe: fall back to a single-line quoted scalar so the
+    // value can never smuggle a frontmatter key or an early `---` fence.
+    return `${key}: ${serializeScalar(value)}`;
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return `${key}: []`;
@@ -567,9 +614,16 @@ function writeRecord(opts) {
   // Scrub EVERY write path before bytes touch disk (§4): the body, each
   // string-valued frontmatter field, and every string nested in `extra`
   // (free-text non-schema fields like a migrated `description`/`metadata`).
+  // `id` is EXCLUDED: it is a structural, already-charset-validated identifier
+  // (isSafeId above), not free-text prose, and the filename is derived from it
+  // below. Scrubbing it here would rewrite an id that happens to match a
+  // redaction shape (e.g. `sk-1-...`) to `[REDACTED:api-key]` AFTER isSafeId
+  // already passed, corrupting identity and producing a filename that never
+  // went through isSafeId.
   const scrubbedBody = scrubSecrets(opts.body == null ? '' : opts.body);
   const redactions = [...scrubbedBody.redactions];
   for (const k of Object.keys(fm)) {
+    if (k === 'id') continue;
     if (typeof fm[k] === 'string') {
       const r = scrubSecrets(fm[k]);
       fm[k] = r.text;
@@ -583,17 +637,20 @@ function writeRecord(opts) {
     throw new Error(`writeRecord: invalid record: ${problems.join('; ')}`);
   }
 
+  // A planted symlink (the scope dir itself, or an ancestor) pointing outside
+  // `root` would otherwise let a write escape the store despite SEGMENT_RE
+  // guarding the string form of the path — see assertContained's own comment.
+  // Checked BEFORE mkdirSync (matching archiveRecord's order below) so a
+  // symlinked ancestor cannot cause an empty directory to be created outside
+  // root before the throw. The WRITE path must throw, not fail open (D11's
+  // fail-open posture is for READS only).
+  assertContained(root, dir);
+
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch (e) {
     throw new Error(`writeRecord: cannot create scope dir ${dir}: ${e.message}`);
   }
-  // A planted symlink (the scope dir itself, or an ancestor) pointing outside
-  // `root` would otherwise let a write escape the store despite SEGMENT_RE
-  // guarding the string form of the path — see assertContained's own comment.
-  // The WRITE path must throw, not fail open (D11's fail-open posture is for
-  // READS only).
-  assertContained(root, dir);
 
   // Archive a superseded record if asked. Keep the old file (history), never
   // delete it (§3.2).
