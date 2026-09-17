@@ -58,6 +58,28 @@ t('an encrypted PEM private key block is still recognized as a private key', () 
   assert.ok(!text.includes('MIIEpAIBAAKCAQEA'), text);
 });
 
+t('a real PGP private key block (BEGIN/END ... BLOCK) is redacted', () => {
+  const before = '-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBGP7abcdef\n-----END PGP PRIVATE KEY BLOCK-----\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.ok(text.includes('[REDACTED:pem]'), text);
+  assert.ok(!text.includes('lQdGBGP7abcdef'), text);
+  assert.strictEqual(redactions.length, 1);
+  assert.strictEqual(redactions[0].kind, 'pem');
+});
+
+t('a PEM body over the 8192-char bound is NOT matched (known/intentional coverage limit)', () => {
+  // The PEM body quantifier is intentionally bounded ({0,8192}?, see the
+  // ReDoS-mitigation comment in lib/redact.js) so a legitimately huge PEM
+  // body — or an unterminated BEGIN line — cannot force a scan to EOF. This
+  // pins that bound as a documented, deliberate coverage limit rather than
+  // an accidental regression: a real key with a body this large would slip
+  // through, and that is a known, accepted tradeoff.
+  const before = '-----BEGIN RSA PRIVATE KEY-----\n' + 'M'.repeat(8200) + '\n-----END RSA PRIVATE KEY-----\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before, 'an over-bound PEM body must be left unchanged (documented limit)');
+  assert.strictEqual(redactions.length, 0);
+});
+
 t('a Slack token is redacted', () => {
   const { text } = redact.scrubSecrets('xoxb-1234567890-abcdefghij');
   assert.ok(text.includes('[REDACTED:slack-token]'), text);
@@ -129,6 +151,42 @@ t('a lowercase-with-underscore secret-assignment keyword is still redacted', () 
   const { text } = redact.scrubSecrets("aws_secret_key='xxxxxxxxxxxx'\n");
   assert.ok(text.includes("aws_secret_key='[REDACTED:secret-assignment]'"), text);
   assert.ok(!text.includes('xxxxxxxxxxxx'), text);
+});
+
+t('an identifier-shaped keyword followed by ordinary prose is left unchanged (github-token)', () => {
+  const before = 'github-token: rotated last week\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before);
+  assert.strictEqual(redactions.length, 0);
+});
+
+t('an identifier-shaped keyword followed by ordinary prose is left unchanged (aws_secret_key)', () => {
+  const before = 'aws_secret_key: rotate it manually\n';
+  const { text, redactions } = redact.scrubSecrets(before);
+  assert.strictEqual(text, before);
+  assert.strictEqual(redactions.length, 0);
+});
+
+t('a bare lowercase keyword in a tight = assignment is redacted (secret=VALUE)', () => {
+  const { text, redactions } = redact.scrubSecrets('secret=abc123abc123\n');
+  assert.ok(text.includes('secret=[REDACTED:secret-assignment]'), text);
+  assert.ok(!text.includes('abc123abc123'), text);
+  assert.strictEqual(redactions.length, 1);
+  assert.strictEqual(redactions[0].kind, 'secret-assignment');
+});
+
+t('a bare lowercase keyword in a tight = assignment is redacted (token=VALUE)', () => {
+  const { text, redactions } = redact.scrubSecrets('token=abc123def456\n');
+  assert.ok(text.includes('token=[REDACTED:secret-assignment]'), text);
+  assert.ok(!text.includes('abc123def456'), text);
+  assert.strictEqual(redactions.length, 1);
+});
+
+t('a quoted lowercase-word value still redacts despite the prose-value carve-out', () => {
+  const { text, redactions } = redact.scrubSecrets("FOO_TOKEN='rotated'\n");
+  assert.ok(text.includes("FOO_TOKEN='[REDACTED:secret-assignment]'"), text);
+  assert.ok(!text.includes('rotated'), text);
+  assert.strictEqual(redactions.length, 1);
 });
 
 t('a secret-assignment value already redacted by a more specific pattern is not double-counted', () => {

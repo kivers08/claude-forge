@@ -32,16 +32,23 @@
 // file there anyway, and user-scope memory is machine-local/personal, not
 // the committed/shared surface this hook exists to protect.
 //
-// The containment test resolves the target to a real absolute path FIRST
-// (path.resolve, which collapses `..` and mixed separators) and then checks
-// containment with path.relative against each memory root — mirroring the
-// anchored style of guards/user-level-write.js / guards/worktree-commit.js —
-// rather than testing a regex or doing an unanchored string replace/prefix
-// check against the raw, possibly-relative path. A non-normalized check here
-// is a security gap in both directions: a real agent-memory write that spells
-// its path with a `..` segment could evade the scrub, and a path merely
-// starting with the same characters outside the tree could be mistaken for
-// one inside it.
+// The containment test resolve-then-compares (as in guards/worktree-commit.js):
+// resolve the target to an absolute path FIRST (path.resolve, which collapses
+// `..` and mixed separators), then check containment with an anchored
+// path.relative against each memory root, tightened further with
+// fs.realpathSync (see the realpath comment below) — rather than testing a
+// regex or doing an unanchored string replace/prefix check against the raw,
+// possibly-relative path. A non-normalized check here is a security gap in
+// both directions: a real agent-memory write that spells its path with a
+// `..` segment could evade the scrub, and a path merely starting with the
+// same characters outside the tree could be mistaken for one inside it.
+//
+// path.resolve alone does not follow symlinks, though: a symlink placed
+// INSIDE agent-memory (e.g. .claude/agent-memory/forge-x/note.md -> some file
+// outside the repo) would pass the path.resolve-based containment check even
+// though readFileSync/writeFileSync follow the symlink and act on the
+// external target. So the real path (fs.realpathSync) is what containment is
+// actually tested against, and what is read/written — see main() below.
 //
 // Fails open on every error: a hook must never crash or block a session, and
 // this one additionally must never be the reason a legitimate memory write is
@@ -114,17 +121,54 @@ function main() {
   if (!absPath) return;
   if (!isAgentMemoryMarkdown(absPath, projectDir)) return;
 
+  // path.resolve (above) collapses `..` but does NOT follow symlinks. A
+  // symlink planted INSIDE agent-memory whose target is OUTSIDE it would
+  // pass the isAgentMemoryMarkdown check above on its own (symlink) path,
+  // yet fs.readFileSync/writeFileSync below follow the link and act on the
+  // real, external file. So the containment check is re-run on the REAL
+  // path, and the real path is what's stat'd/read/written from here on.
+  // Fails open on a realpath error (e.g. broken symlink, race) the same way
+  // every other step in this hook does: skip, never crash/block.
+  let real;
+  try {
+    real = fs.realpathSync(absPath).replace(/\\/g, '/');
+  } catch (e) {
+    return;
+  }
+  if (!isAgentMemoryMarkdown(real, projectDir)) return;
+
+  const dataDir = io.dataDir(process.argv);
+  // Repo-relative path only (never the secret, never a full machine path):
+  // matches the D10 telemetry norm of logging what was affected, not what
+  // was in it. Anchored path.relative, not an unanchored string replace, so
+  // this can't produce a bogus relative path if `real` merely happens to
+  // start with the same characters as projectDir without truly being inside it.
+  const proj = projectDir ? path.resolve(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/') : null;
+  const projRel = proj ? path.relative(proj, real).replace(/\\/g, '/') : real;
+
   let stat;
   try {
-    stat = fs.statSync(absPath);
+    stat = fs.statSync(real);
   } catch (e) {
     return; // file missing/unreadable: nothing to scrub, fail open
   }
-  if (stat.size > MAX_SCRUB_BYTES) return; // too large to scrub in-session; see MAX_SCRUB_BYTES above
+  if (stat.size > MAX_SCRUB_BYTES) {
+    // Silent skip here would mean a file with secrets can be committed
+    // unscrubbed with no record of it — a D10 telemetry gap, not just a
+    // functional limit. Kind/counts only: no content, no full path.
+    io.telemetry(dataDir, {
+      event: 'memory_redact_skipped',
+      reason: 'size',
+      session_id: payload.session_id || null,
+      bytes: stat.size,
+      file: projRel,
+    });
+    return; // too large to scrub in-session; see MAX_SCRUB_BYTES above
+  }
 
   let original;
   try {
-    original = fs.readFileSync(absPath, 'utf8');
+    original = fs.readFileSync(real, 'utf8');
   } catch (e) {
     return; // file missing/unreadable: nothing to scrub, fail open
   }
@@ -132,18 +176,10 @@ function main() {
   const { text, redactions } = redact.scrubSecrets(original);
   if (text === original || !redactions.length) return; // byte-identical: no write
 
-  fs.writeFileSync(absPath, text, 'utf8');
+  fs.writeFileSync(real, text, 'utf8');
 
-  const dataDir = io.dataDir(process.argv);
   const counts = {};
   for (const r of redactions) counts[r.kind] = (counts[r.kind] || 0) + 1;
-  // Repo-relative path only (never the secret, never a full machine path):
-  // matches the D10 telemetry norm of logging what was affected, not what
-  // was in it. Anchored path.relative, not an unanchored string replace, so
-  // this can't produce a bogus relative path if absPath merely happens to
-  // start with the same characters as projectDir without truly being inside it.
-  const proj = projectDir ? path.resolve(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/') : null;
-  const projRel = proj ? path.relative(proj, absPath).replace(/\\/g, '/') : absPath;
   io.telemetry(dataDir, {
     event: 'memory_redacted',
     session_id: payload.session_id || null,

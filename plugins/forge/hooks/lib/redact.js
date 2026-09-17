@@ -10,8 +10,7 @@
 // (D28.4).
 //
 // A stdlib pattern safety-net, NOT a guarantee. A bare high-entropy string with
-// no recognizable prefix/shape can slip through — this is documented honestly
-// wherever a redacted record is written (see REDACTION_CAVEAT).
+// no recognizable prefix/shape can slip through.
 //
 // Each entry: { kind, re } where `re` has a capture group for any leading
 // keyword/prefix we want to preserve so the record stays readable.
@@ -24,8 +23,13 @@ const REDACTION_PATTERNS = [
     // 8 KB is ample) rather than an unbounded [\s\S]*? — an unterminated
     // BEGIN line would otherwise force the engine to scan all the way to EOF
     // once per BEGIN before giving up, which is O(k*n) in file size.
+    // The real PGP private key header/footer is
+    // `-----BEGIN PGP PRIVATE KEY BLOCK-----` / `-----END PGP PRIVATE KEY
+    // BLOCK-----` (a ` BLOCK` suffix the other key types don't have) — so
+    // `(?: BLOCK)?` is allowed on BOTH ends, not just assumed absent, or the
+    // `PGP ` alternative never actually matches a real pasted GPG key.
     kind: 'pem',
-    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]{0,8192}?-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----[\s\S]{0,8192}?-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/g,
     replace: () => '[REDACTED:pem]',
   },
   // AWS access key id.
@@ -79,7 +83,12 @@ const REDACTION_PATTERNS = [
     // store is prose) like "the secret: sauce" or "password: is a bad idea".
     // A keyword qualifies only if it is ALL-CAPS (GITHUB_TOKEN, SECRET) or
     // contains a `_`/`-` separator (aws_secret, api-key) — a bare lowercase
-    // word with no separator (secret, token, password) does not.
+    // word with no separator (secret, token, password) does not. But an
+    // identifier-shaped keyword can STILL be prose — "github-token: rotated
+    // last week" and "aws_secret_key: rotate it manually" both have a
+    // hyphen/underscore keyword yet an ordinary English-sentence value — so
+    // the identifier check alone is not sufficient either; see `replace`
+    // below for the combined rule.
     // The keyword's surrounding classes are BOUNDED ({0,64}, not the
     // unbounded *) — an unbounded class-star around an 8-way alternation is
     // vulnerable to catastrophic backtracking (O(n^2)) on adversarial input
@@ -88,20 +97,30 @@ const REDACTION_PATTERNS = [
     // a legitimate match.
     kind: 'secret-assignment',
     re: /\b([A-Za-z0-9_-]{0,64}(?:SECRET|TOKEN|PASSWORD|APIKEY|API[_-]KEY|ACCESS[_-]KEY|PRIVATE[_-]KEY)[A-Za-z0-9_-]{0,64})(\s*[=:]\s*)(["']?)(?!\[REDACTED:)([^\s"']{6,})\3/gi,
-    replace: (m, kw, sep, quote) => {
+    replace: (m, kw, sep, quote, val) => {
+      // Neither the keyword shape NOR the separator shape alone is enough to
+      // tell a credential from prose. Three signals combine:
+      //   - looksLikeIdentifier: the keyword reads like an env var/config key
+      //     (ALL-CAPS or `_`/`-` separated) rather than a plain English word.
+      //   - isTightAssignment: a bare `=` with NO surrounding whitespace
+      //     (`secret=VALUE`) is never English prose regardless of keyword
+      //     case — prose never writes "secret=" mid-sentence — so this alone
+      //     is sufficient even for a bare lowercase keyword like `secret` or
+      //     `token`.
+      //   - looksLikeProseValue: an unquoted, whitespace-separated value that
+      //     is nothing but lowercase letters (`token: rotated`) reads as an
+      //     English sentence, not a credential — a real secret value nearly
+      //     always contains a digit, mixed case, or punctuation. A QUOTED
+      //     value is always treated as a credential (quoting a plain English
+      //     word as a "value" is not something ordinary prose does).
       const looksLikeIdentifier = kw === kw.toUpperCase() || /[_-]/.test(kw);
-      return looksLikeIdentifier ? `${kw}${sep}${quote}[REDACTED:secret-assignment]${quote}` : m;
+      const isTightAssignment = sep.trim() === '=' && !/\s/.test(sep);
+      const looksLikeProseValue = !quote && /\s/.test(sep) && /^[a-z]+$/.test(val);
+      const shouldRedact = (looksLikeIdentifier || isTightAssignment) && !looksLikeProseValue;
+      return shouldRedact ? `${kw}${sep}${quote}[REDACTED:secret-assignment]${quote}` : m;
     },
   },
 ];
-
-// Unused by memory-redact.js today (it only needs scrubSecrets + the
-// patterns) — retained for the not-yet-built adoption-migration unit
-// (D28.4 unit 4), which will need to scrub structured/frontmatter values and
-// surface this caveat to whatever it writes.
-const REDACTION_CAVEAT =
-  'Redaction is a stdlib pattern safety-net, not a guarantee: a bare ' +
-  'high-entropy string with no recognizable prefix can slip through.';
 
 // Returns { text, redactions } — redactions is a list of { kind } counted so a
 // caller can log/telemeter what was scrubbed without re-exposing the secret.
@@ -123,26 +142,7 @@ function scrubSecrets(input) {
   return { text, redactions };
 }
 
-// Recursively scrub every string in a JSON-ish value, pushing each redaction
-// into `redactions`. Kept alongside scrubSecrets for callers that need to
-// scrub a parsed structure (e.g. frontmatter) rather than raw file text —
-// see the D28.4 unit 4 note on REDACTION_CAVEAT above; no current caller.
-function scrubValueDeep(value, redactions) {
-  if (typeof value === 'string') {
-    const r = scrubSecrets(value);
-    for (const red of r.redactions) redactions.push(red);
-    return r.text;
-  }
-  if (Array.isArray(value)) return value.map((v) => scrubValueDeep(v, redactions));
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const k of Object.keys(value)) out[k] = scrubValueDeep(value[k], redactions);
-    return out;
-  }
-  return value;
-}
-
 module.exports = {
-  REDACTION_PATTERNS, REDACTION_CAVEAT,
-  scrubSecrets, scrubValueDeep,
+  REDACTION_PATTERNS,
+  scrubSecrets,
 };

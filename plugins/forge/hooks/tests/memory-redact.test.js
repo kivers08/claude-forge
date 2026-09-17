@@ -120,6 +120,14 @@ t('a single-quoted FOO_SECRET= assignment preserves its surrounding single quote
   assert.ok(!after.includes('abc123def456'), after);
 });
 
+t('prose using an identifier-shaped keyword is left byte-identical (github-token: rotated ...)', () => {
+  const before = 'github-token: rotated last week\n';
+  const r = run('Write', '.claude/agent-memory/forge-implementer/x.md', before);
+  assert.strictEqual(r.status, 0);
+  const after = fs.readFileSync(r.absPath, 'utf8');
+  assert.strictEqual(after, before);
+});
+
 t('a clean agent-memory .md file is left byte-identical', () => {
   const before = '---\nname: clean\ndescription: nothing sensitive\n---\n\nJust plain notes.\n';
   const r = run('Write', '.claude/agent-memory/forge-implementer/clean.md', before);
@@ -220,6 +228,39 @@ t('a real agent-memory write reached via a redundant .. segment is still scrubbe
   assert.ok(after.includes('[REDACTED:aws-access-key]'), after);
 });
 
+t('a symlink inside agent-memory pointing OUTSIDE it is not read or rewritten', () => {
+  // .claude/agent-memory/forge-x/note.md -> ../../../outside/secret.md, where
+  // outside/ is NOT under any MEMORY_SUBDIR. path.resolve alone would see the
+  // symlink's own (in-tree) path and pass containment; only resolving the
+  // REAL target with fs.realpathSync catches that it points elsewhere.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const outsideDir = path.join(dir, 'outside');
+  fs.mkdirSync(outsideDir, { recursive: true });
+  const externalFile = path.join(outsideDir, 'secret.md');
+  const externalBefore = 'leaked key AKIAABCDEFGHIJKLMNOP here\n';
+  fs.writeFileSync(externalFile, externalBefore, 'utf8');
+
+  const linkDir = path.join(dir, '.claude', 'agent-memory', 'forge-x');
+  fs.mkdirSync(linkDir, { recursive: true });
+  const linkPath = path.join(linkDir, 'note.md');
+  fs.symlinkSync(externalFile, linkPath);
+
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const payload = JSON.stringify({
+    session_id: 'test-session',
+    cwd: dir,
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Write',
+    tool_input: { file_path: linkPath, content: 'x' },
+  });
+  const r = spawnSync(process.execPath, [HOOK, dataDir], {
+    input: payload, encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+  });
+  assert.strictEqual(r.status, 0);
+  const after = fs.readFileSync(externalFile, 'utf8');
+  assert.strictEqual(after, externalBefore, 'a symlink escape must leave the external file byte-identical');
+});
+
 t('a file larger than the size guard is left untouched', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
   const relPath = '.claude/agent-memory/forge-implementer/big.md';
@@ -241,6 +282,36 @@ t('a file larger than the size guard is left untouched', () => {
   assert.strictEqual(r.status, 0);
   const after = fs.readFileSync(absPath, 'utf8');
   assert.strictEqual(after, big, 'a file over the size guard must be left byte-identical');
+});
+
+t('an oversize agent-memory file records a memory_redact_skipped telemetry event', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const relPath = '.claude/agent-memory/forge-implementer/big.md';
+  const absPath = path.join(dir, relPath);
+  fs.mkdirSync(path.dirname(absPath), { recursive: true });
+  const big = 'x'.repeat(65 * 1024) + '\nAKIAABCDEFGHIJKLMNOP\n';
+  fs.writeFileSync(absPath, big, 'utf8');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const payload = JSON.stringify({
+    session_id: 'test-session',
+    cwd: dir,
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Write',
+    tool_input: { file_path: absPath, content: 'x' },
+  });
+  const r = spawnSync(process.execPath, [HOOK, dataDir], {
+    input: payload, encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+  });
+  assert.strictEqual(r.status, 0);
+  const after = fs.readFileSync(absPath, 'utf8');
+  assert.strictEqual(after, big, 'an oversize file must still be left byte-identical');
+  const records = readTelemetry(dataDir).filter((rec) => rec.event === 'memory_redact_skipped');
+  assert.strictEqual(records.length, 1, JSON.stringify(records));
+  assert.strictEqual(records[0].reason, 'size');
+  assert.ok(records[0].bytes > 0, JSON.stringify(records[0]));
+  assert.ok(records[0].file.endsWith('big.md'), JSON.stringify(records[0]));
+  const raw = fs.readFileSync(path.join(dataDir, 'telemetry.jsonl'), 'utf8');
+  assert.ok(!raw.includes('AKIAABCDEFGHIJKLMNOP'), 'telemetry must never contain file content');
 });
 
 t('a write OUTSIDE .claude/agent-memory/ is ignored', () => {
