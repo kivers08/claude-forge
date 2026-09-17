@@ -56,9 +56,12 @@ Owner-confirmed decision closing the storage/recall questions left open in
   is **deferred** — a zero-migration bolt-on later, since adding vectors leaves
   the canonical markdown store unchanged.
 
-**Consequence — D11 amendment:** the Node floor rises from ≥20 to **≥22.5**
-(`node:sqlite` availability). Both target boxes run 22.23. D11 must be updated
-to reflect this when the epic lands.
+**Consequence — D11 amendment (now CONDITIONAL, see D28.4):** `node:sqlite`'s
+FTS5 would raise the Node floor from ≥20 to **≥22.5**. As of the D28.4 re-scope
+this only applies **if** the optional visible/ranked-recall path (which is what
+needs the index) actually ships; the thin-layer core relies on native subagent
+memory and needs no index, so the floor stays at ≥20 until then. Both target
+boxes run 22.23 regardless, so the raise is free when we take it.
 
 **Scope confirmed:** memory-v2 is forge's per-agent **AI-coding memory**
 (lessons agents learn while working), **not** a client/business-data store.
@@ -78,8 +81,9 @@ to reflect this when the epic lands.
 
 **Still deferred (unchanged from §9):** which embedder for the optional dense
 reranker (unit 7); whether ambient write is on by default for non-reviewer
-agents; the exact record `type` set beyond fact/lesson/decision/note; and the
-unverified CLI-behavior questions in §6.
+agents; and the unverified CLI-behavior questions in §6. *(The record `type` set
+was later SETTLED by D28.3 — Anthropic's `user|feedback|project|reference` plus
+`decision` — so it is no longer deferred.)*
 
 ---
 
@@ -300,16 +304,22 @@ unit 1's hook; the rest is retired.
 
 ### 3.1 Storage split
 
+> **Amended by D28.4:** the canonical store below is now provided by **native
+> subagent memory** (`memory: <scope>`), which writes exactly this
+> `.claude/agent-memory/<plugin>-<agent>/` layout and format. The **local index
+> is OPTIONAL and deferred** — it (and the Node ≥22.5 raise) only ships with the
+> optional visible/ranked-recall path. The thin-layer core needs no index.
+
 - **Canonical (committed, reviewable):** `.claude/agent-memory/<plugin>-<agent>/`
   markdown records, one file per record, with YAML-ish frontmatter (§below). A
   shared `.claude/agent-memory/forge-coordinator/` scope. This is the source of
-  truth — diff-visible, gated, revocable by `git revert`.
-- **Local index (rebuildable, git-ignored):** a single
-  `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar built on **`node:sqlite`**
-  (SETTLED — see D28.1; its FTS5 gives BM25 directly). This raises forge's Node
-  floor to **≥22.5**, an accepted D11 amendment; both target boxes run 22.23.
-  Stdlib JSON is the retained fallback. The index is never authoritative;
-  `forge memory reindex` rebuilds it from the markdown.
+  truth — diff-visible, gated, revocable by `git revert`. **(Native writes this.)**
+- **Local index (OPTIONAL, deferred — see D28.4):** if the ranked-recall path
+  ships, a single `${CLAUDE_PLUGIN_DATA}/memory-index/` sidecar built on
+  **`node:sqlite`** (its FTS5 gives BM25 directly), which is what would raise the
+  Node floor to **≥22.5** (both target boxes run 22.23). Stdlib JSON is the
+  retained fallback. The index is never authoritative; `forge memory reindex`
+  rebuilds it from the markdown. Not part of the thin-layer core.
 
 ### 3.2 Record schema (SETTLED — see D28.3)
 
@@ -489,9 +499,11 @@ on unit 1.
 ## 9. Not resolved (explicit)
 
 - ~~The `node:sqlite` floor-raise (Node 22.5) vs. staying stdlib-JSON~~ —
-  **RESOLVED (D28.1, 2026-09-16): `node:sqlite` chosen; Node floor raised to
-  ≥22.5.**
+  **RESOLVED (D28.1) then made CONDITIONAL (D28.4): `node:sqlite` is chosen for
+  the OPTIONAL ranked-recall path only; the thin-layer core needs no index and
+  keeps the ≥20 floor until/unless that path ships.**
+- ~~The exact record `type` set~~ — **RESOLVED (D28.3): Anthropic's
+  `user|feedback|project|reference` + forge's `decision`.**
 - Which embedder (if any) for unit 7 — name, size, license to be settled then.
 - Whether ambient write is on by default for non-reviewer agents or opt-in.
-- The exact record `type` set beyond fact/lesson/decision/note.
 - The unverified CLI-behavior questions in §6.
