@@ -129,6 +129,52 @@ adoption-migration unit (§7 unit 8) generalizes it.
 
 ---
 
+## D28.3 — Record schema: Anthropic-superset, single vocabulary (SETTLED 2026-09-16)
+
+Owner-confirmed. Closes the "field names not yet verified" note in §3.2 and the
+"exact record `type` set" item deferred in D28.1.
+
+**Decision: a memory-v2 record IS a valid Anthropic native-memory record, extended.**
+Rather than invent a parallel schema and keep two formats side by side, memory-v2
+records are a strict **superset** of Claude Code's documented memory format:
+
+- `name` and `description` stay at the **top level** (Anthropic fields). The
+  `description` is load-bearing — it is the native memory tool's relevance key,
+  and memory-v2's recall keeps it.
+- All of forge's operational/ranking fields move **under the `metadata:` block**
+  the Anthropic format already provides: `type`, `scope`, `id`, `tier`,
+  `importance`, `created`, `lastUsed`, `uses`, `source`, `supersedes`.
+
+**Type vocabulary: Anthropic's set + one forge extension.**
+`user | feedback | project | reference` (Anthropic) **plus `decision`** (a coding
+agent needs a decisions log the four subject-types don't cover). An unknown
+`type` value degrades gracefully — a native reader still sees a valid
+`name`/`description`/`metadata` record.
+
+**Why superset, not a new schema (owner: "I don't think we need two schemas"):**
+- One format. A consumer repo's existing native-memory records are already ~90%
+  conformant — adoption migration (D28.2) just adds the `metadata.*` ranking
+  fields, rather than translating into a foreign vocabulary.
+- Native compatibility. A file memory-v2 writes is still readable by Claude
+  Code's own memory tool.
+- Confirmed by research: the claude-code-guide agent found forge's subagent
+  *definition* format already tracks Anthropic's spec exactly; aligning the
+  *record* format closes the last divergence.
+
+**Consequence — parser gains bounded one-level nesting.** Unit 1's parser, which
+was flat-scalar-only, adds support for exactly one level of `metadata:` nesting
+(read into a real object, serialized back as an indented block). No deeper
+nesting; the injection-safe serializer (the multiline-block guard) still governs
+every value. This reshapes Unit 1's record layout — decided **before Unit 1
+merges**, so Wave 2 builds on the final schema.
+
+**Migration mapping (for D28.2 / Unit 8):** `feedback→feedback`,
+`project→project`, `user→user`, `reference→reference` (the old top-level or
+`metadata.type` value is carried through); forge's own decisions use
+`type: decision`. The pristine original is archived per D28.2 regardless.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
@@ -188,27 +234,34 @@ adoption-migration unit (§7 unit 8) generalizes it.
   Stdlib JSON is the retained fallback. The index is never authoritative;
   `forge memory reindex` rebuilds it from the markdown.
 
-### 3.2 Record schema (to settle in review — field names not yet verified)
+### 3.2 Record schema (SETTLED — see D28.3)
+
+A memory-v2 record is a strict **superset** of Claude Code's native memory
+format: `name`/`description` at top level, everything else under `metadata:`.
 
 ```
 --- (frontmatter) ---
-id:        <ulid-like, generated without Date.now/Math.random in hooks — see note>
-type:      fact | lesson | decision | note        # subset of PMB's ten; justify additions
-scope:     reviewer | implementer | bug-fixer | test-writer | doc-updater | explorer | coordinator
-tier:      working | episodic | semantic          # fade speed; recall promotes toward semantic
-importance: 0.0–1.0
-created:   <ISO8601, stamped by the writing process, not inside a hook>
-lastUsed:  <ISO8601 | null>
-uses:      <int>
-source:    authored | learning-block | ambient    # provenance — see §4
-supersedes: <id | null>                            # keyed-fact-style upsert; old kept, archived
+name:        <short-kebab-case-slug>                 # Anthropic memory field
+description: <one-line relevance summary>            # Anthropic field; drives recall relevance
+metadata:
+  type:       user | feedback | project | reference | decision   # Anthropic set + forge `decision`
+  scope:      reviewer | implementer | bug-fixer | test-writer | doc-updater | explorer | coordinator
+  id:         <uuid — generated without Date.now/Math.random in hooks>
+  tier:       working | episodic | semantic          # fade speed; recall promotes toward semantic
+  importance: 0.0–1.0
+  created:    <ISO8601 — stamped by the writing process, not inside a hook>
+  lastUsed:   <ISO8601 | null>
+  uses:       <int ≥ 0>
+  source:     authored | learning-block | ambient    # provenance — see §4
+  supersedes: <id | null>                            # keyed upsert; old kept, archived
 --- (body) ---
-<the record; for a lesson, follow with the D6 anchor convention>
+<the record; for feedback/project, structure as rule/fact + **Why:** + **How to apply:**
+ per Anthropic's guidance; a learning-block record follows the D6 anchor convention>
 ```
 
-`type` starts as a **small** set (fact/lesson/decision/note); PMB's goal,
-milestone, qa, git/file/code, image types are deferred until a concrete need —
-adding a type is cheap, removing one is not.
+The `type` set is Anthropic's four subject-types plus forge's `decision`
+extension (D28.3). PMB's goal/milestone/qa/git/file/code/image types are deferred
+until a concrete need — adding a type is cheap, removing one is not.
 
 ### 3.3 Recall pipeline (lexical core, optional rerank)
 
