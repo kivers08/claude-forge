@@ -80,6 +80,12 @@ Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, which docs you updated and why, and any doc you found stale
 but left untouched because it was out of scope.
 
+## Memory
+
+This agent uses native `memory: project` at `.claude/agent-memory/forge-doc-updater/`,
+committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
+the redaction hook before disk.
+
 ## Hard constraints
 
 - Never invent a new documentation structure, template, or file unless asked.
