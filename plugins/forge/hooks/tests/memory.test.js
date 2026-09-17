@@ -97,6 +97,14 @@ t('redacts a PEM private key block', () => {
   assert.ok(redactions.some((r) => r.kind === 'pem'));
 });
 
+t('redacts an ENCRYPTED PRIVATE KEY block (Copilot finding)', () => {
+  const s = 'x\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIsecretbytes\n-----END ENCRYPTED PRIVATE KEY-----\ny';
+  const { text, redactions } = mem.scrubSecrets(s);
+  assert.ok(text.includes('[REDACTED:pem]'), text);
+  assert.ok(!text.includes('MIIsecretbytes'), 'encrypted key body must not reach disk');
+  assert.ok(redactions.some((r) => r.kind === 'pem'));
+});
+
 t('redacts an AWS access key id', () => {
   const { text } = mem.scrubSecrets('key AKIAIOSFODNN7EXAMPLE end');
   assert.ok(text.includes('[REDACTED:aws-access-key]'), text);

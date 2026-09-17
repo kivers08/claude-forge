@@ -60,10 +60,12 @@ const FIELD_ORDER = [
 // Each entry: { kind, re } where `re` has a capture group for any leading
 // keyword/prefix we want to preserve so the record stays readable.
 const REDACTION_PATTERNS = [
-  // PEM private key blocks (RSA/EC/OPENSSH/generic). Multiline.
+  // PEM private key blocks (RSA/EC/OPENSSH/DSA/PGP/ENCRYPTED/generic).
+  // `ENCRYPTED ` is included: an encrypted private key is still a private key
+  // and no later token pattern would catch the block.
   {
     kind: 'pem',
-    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g,
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
     replace: () => '[REDACTED:pem]',
   },
   // AWS access key id.
@@ -557,14 +559,15 @@ function archiveRecord(dir, id) {
   try {
     if (!fs.statSync(src).isFile()) return null;
   } catch (e) {
-    return null; // no such record — nothing to archive
+    // Genuinely missing source = nothing to archive (benign). Any OTHER fs
+    // error (permissions, etc.) is a real fault and must NOT be swallowed:
+    // a superseding write must not proceed as if the old record were archived.
+    if (e.code === 'ENOENT') return null;
+    throw new Error(`memory: cannot stat record to archive (${src}): ${e.message}`);
   }
   const archiveDir = path.join(dir, ARCHIVE_DIR);
-  try {
-    fs.mkdirSync(archiveDir, { recursive: true });
-  } catch (e) {
-    return null;
-  }
+  // fs failure here is fatal, not swallowed — see above.
+  fs.mkdirSync(archiveDir, { recursive: true });
   // Never clobber an existing archived version: suffix with a counter.
   let dest = path.join(archiveDir, recordFileName(id));
   let n = 1;
@@ -572,12 +575,12 @@ function archiveRecord(dir, id) {
     dest = path.join(archiveDir, `${recordFileName(id).replace(/\.md$/, '')}.${n}.md`);
     n++;
   }
-  try {
-    fs.renameSync(src, dest);
-    return dest;
-  } catch (e) {
-    return null;
-  }
+  // fs failure here is fatal: if the rename fails, the old record is still
+  // live, so the caller must NOT go on to write the superseding record as if
+  // the archive succeeded. Let it throw (writeRecord already throws on a bad
+  // write, and it archives BEFORE writing the new record).
+  fs.renameSync(src, dest);
+  return dest;
 }
 
 module.exports = {
