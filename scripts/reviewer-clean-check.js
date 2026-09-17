@@ -191,18 +191,32 @@ function readReviewerSystemPromptFromBase(base) {
 // Returns { text } on success (text is '' when the base ref has no memory
 // directory yet) or { error } on a genuine fault.
 function readReviewerMemoryFromBase(base) {
-  const probe = spawnSync('git', ['ls-tree', '-r', '--name-only', `origin/${base}`, '--', REVIEWER_MEMORY_DIR], {
+  // -c core.quotePath=false + -z: same hazard as changedInstructionSurfaces
+  // below, and load-bearing for the same reason. Without it, any memory file
+  // whose name has a non-ASCII byte, a quote, a backslash or a control
+  // character comes back double-quoted with C-style escapes (e.g.
+  // ".claude/agent-memory/forge-reviewer/caf\303\251.md"), which then cannot
+  // be resolved by `git show origin/<base>:<that literal string>` — a
+  // genuine git fault, caught below, that would fail EVERY PR the moment one
+  // such file exists. -z also removes the newline-in-filename ambiguity a
+  // split('\n') would have, and paths are used raw (no .trim()) since
+  // trimming would corrupt a name with deliberate leading/trailing
+  // whitespace.
+  const probe = spawnSync('git', [
+    '-c', 'core.quotePath=false',
+    'ls-tree', '-r', '--name-only', '-z', `origin/${base}`, '--', REVIEWER_MEMORY_DIR,
+  ], {
     cwd: ROOT, encoding: 'utf8',
   });
   if (probe.error) return { error: `git ls-tree failed: ${probe.error.message}` };
   if (probe.status !== 0) return { error: `git ls-tree exited ${probe.status} for ${REVIEWER_MEMORY_DIR}` };
   if ((probe.stderr || '').trim()) return { error: `git ls-tree: ${probe.stderr.trim()}` };
-  const files = probe.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const files = probe.stdout.split('\0').filter(Boolean);
   if (files.length === 0) return { text: '' }; // no memory recorded yet — valid, not a fault
 
   const parts = [];
   for (const f of files) {
-    const r = spawnSync('git', ['show', `origin/${base}:${f}`], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync('git', ['-c', 'core.quotePath=false', 'show', `origin/${base}:${f}`], { cwd: ROOT, encoding: 'utf8' });
     if (r.error) return { error: `git show failed for ${f}: ${r.error.message}` };
     if (r.status !== 0) return { error: `git show exited ${r.status} for ${f}` };
     parts.push(`--- ${f} ---\n${r.stdout}`);
@@ -623,9 +637,22 @@ async function main() {
   }
   // Written even when empty (reviewerMemory === ''), so the prompt below can
   // always point at a real file rather than branching its wording on whether
-  // memory exists yet.
-  fs.writeFileSync(MEMORY_FILE, reviewerMemory, 'utf8');
-  memoryFileWritten = true;
+  // memory exists yet. The catch below explicitly unlinks DIFF_FILE too: the
+  // spawnSync finally block further down only runs once the child process is
+  // actually launched, so a throw here (e.g. disk full) would otherwise
+  // process.exit(1) past it and leave DIFF_FILE — already written above —
+  // orphaned in the working tree. memoryFileWritten is only set true on a
+  // successful write, so MEMORY_FILE is never double-unlinked by the later
+  // block (it was never created on this path).
+  try {
+    fs.writeFileSync(MEMORY_FILE, reviewerMemory, 'utf8');
+    memoryFileWritten = true;
+  } catch (e) {
+    log(`could not write reviewer memory file: ${e.message}`);
+    try { fs.unlinkSync(DIFF_FILE); } catch (e2) { /* already gone */ }
+    await postStatus('failure', 'reviewer clean: could not write reviewer memory file');
+    process.exit(1);
+  }
 
   const prompt = [
     'Review this repository\'s current branch diff against its base branch',

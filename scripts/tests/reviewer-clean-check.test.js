@@ -361,6 +361,54 @@ test('fails closed (returns {error}, not a fallback) when origin/<base> cannot b
   assert.strictEqual(result.text, undefined);
 });
 
+test('reads a memory filename git would default-quote (non-ASCII byte) — the FIX 1 regression case', () => {
+  // Without `-c core.quotePath=false ... -z` on the ls-tree probe, git's
+  // default quoting turns this filename into a double-quoted, C-escaped
+  // literal on ls-tree's stdout (e.g. "...caf\303\251.md"), which then gets
+  // handed verbatim to `git show origin/<base>:<that literal>` and cannot
+  // resolve — exactly the bug this fix closes. Mirrors the existing
+  // 'café.md' fixture already used for matchesInstructionSurface above.
+  const { root, git } = tmpGitRepo();
+  fs.mkdirSync(path.join(root, '.claude/agent-memory/forge-reviewer'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude/agent-memory/forge-reviewer/MEMORY.md'), '- [x](x.md) hub\n');
+  fs.writeFileSync(path.join(root, '.claude/agent-memory/forge-reviewer/café.md'), 'NON-ASCII-FILENAME-LESSON\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+
+  const result = callInFixture(root);
+  assert.strictEqual(result.error, undefined, `expected no error, got: ${result.error}`);
+  assert.ok(
+    result.text.includes('NON-ASCII-FILENAME-LESSON'),
+    'the non-ASCII-named file\'s content must be returned, not dropped or faulted on',
+  );
+});
+
+test('fails closed (returns {error}) when a listed file\'s blob cannot be read via git show', () => {
+  // Simulates a genuine git fault on the per-file `git show` call, distinct
+  // from "no memory recorded yet": ls-tree successfully lists the file (it
+  // reads the tree, not the blob), but the blob's loose object is then
+  // removed from the object store, so `git show origin/<base>:<path>`
+  // exits non-zero. The function must propagate that as {error} rather than
+  // silently return a short/partial memory string.
+  const { root, git } = tmpGitRepo();
+  fs.mkdirSync(path.join(root, '.claude/agent-memory/forge-reviewer'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude/agent-memory/forge-reviewer/MEMORY.md'), '- [x](x.md) hub\n');
+  fs.writeFileSync(path.join(root, '.claude/agent-memory/forge-reviewer/security_x.md'), 'SHOULD-NOT-SURFACE\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+
+  const blobSha = git('rev-parse', 'HEAD:.claude/agent-memory/forge-reviewer/security_x.md').stdout.trim();
+  const loose = path.join(root, '.git/objects', blobSha.slice(0, 2), blobSha.slice(2));
+  assert.ok(fs.existsSync(loose), 'test setup: expected a loose object for the blob');
+  fs.unlinkSync(loose);
+
+  const result = callInFixture(root);
+  assert.strictEqual(typeof result.error, 'string', 'a missing blob must be a fault, not a silent partial result');
+  assert.strictEqual(result.text, undefined);
+});
+
 if (failures > 0) {
   console.error(`\n${failures} test(s) failed`);
   process.exit(1);
