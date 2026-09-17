@@ -384,11 +384,16 @@ Built in U3 (`.github/workflows/ci.yml`, `scripts/validate-changelog.js`,
   from the tree in a future version, or a future edit to the reviewer prompt
   that tells the child to read something new — re-check this enumeration
   when the pinned `claude` version moves or `reviewer.md` grows a new input.
-  One known gap is deliberate: `.claude/agent-memory/forge-reviewer/` is read
-  by the reviewer as prior lessons and so meets the criterion, but gating it
-  would block every legitimate memory update (the D19 unit contains one).
-  Closing it needs a design decision — probably reading agent memory from the
-  base ref, the way the system prompt already is — not a pattern-list entry.
+  **Closed by memory-v2 D28.4 (reviewer safety unit).** The reviewer's own
+  memory (`.claude/agent-memory/forge-reviewer/`) is now read from the base
+  ref (`readReviewerMemoryFromBase`), exactly like the system prompt, and
+  handed to the child as an explicit file alongside the diff — the child is
+  told not to trust `.claude/agent-memory/` if read directly from its
+  `--add-dir`. `.claude/agent-memory/` (every agent's, not just the
+  reviewer's) is also now in `SELF_REVIEW_FORBIDDEN_PATTERNS`: a PR touching
+  it fails the check and needs a human, rather than passing quietly — a
+  memory update is still possible, it just can no longer land unreviewed in
+  the same PR that would benefit from it changing.
   Also note the paths are compared as raw bytes: `changedInstructionSurfaces`
   runs `git diff` with `-z` and `core.quotePath=false` because git's default
   quoting of non-ASCII paths would wrap them in `"` and defeat every anchor
