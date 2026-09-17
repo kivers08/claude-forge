@@ -135,24 +135,60 @@ function main() {
   } catch (e) {
     return;
   }
-  if (!isAgentMemoryMarkdown(real, projectDir)) return;
+
+  // The second containment check MUST be run against a realpath'd project
+  // root, not the raw projectDir: `real` above has every symlink component
+  // resolved (e.g. macOS /tmp -> /private/tmp, or a symlinked /home, worktree
+  // parent, or checkout path on Linux), so comparing it against an
+  // unresolved projectDir makes path.relative produce a spurious `../…` and
+  // containment fail even for a perfectly legitimate write — silently
+  // disabling the scrub with no telemetry. Resolve projectDir the same way
+  // exactly once here and use THIS resolved root for both the check and the
+  // telemetry path below. Fails open to the unresolved dir on a realpath
+  // error, same posture as everywhere else in this hook.
+  let projReal = projectDir;
+  try {
+    projReal = fs.realpathSync(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/');
+  } catch (e) {
+    // fail open to the unresolved dir
+  }
+  if (!isAgentMemoryMarkdown(real, projReal)) return;
 
   const dataDir = io.dataDir(process.argv);
   // Repo-relative path only (never the secret, never a full machine path):
   // matches the D10 telemetry norm of logging what was affected, not what
   // was in it. Anchored path.relative, not an unanchored string replace, so
   // this can't produce a bogus relative path if `real` merely happens to
-  // start with the same characters as projectDir without truly being inside it.
-  const proj = projectDir ? path.resolve(String(projectDir).replace(/\\/g, '/')).replace(/\\/g, '/') : null;
+  // start with the same characters as projReal without truly being inside it.
+  const proj = projReal ? path.resolve(String(projReal).replace(/\\/g, '/')).replace(/\\/g, '/') : null;
   const projRel = proj ? path.relative(proj, real).replace(/\\/g, '/') : real;
+
+  // Open the real (already-resolved) path with O_NOFOLLOW on the final
+  // component for both the read and the write: fs.realpathSync above only
+  // tells us what `real` pointed to at that instant, but between then and
+  // the fs.readFileSync/fs.writeFileSync that used to follow directly, the
+  // final path component could be swapped out for a symlink (TOCTOU) that a
+  // plain write would happily follow and clobber. Opening with O_NOFOLLOW
+  // makes the OS refuse (ELOOP) if that component is ever a symlink at open
+  // time, and the read/write below operate on the fd, not the path, so
+  // there's no further path-based race after this point. Fails open (skip,
+  // never throw/block) on ENOENT/ELOOP/any other open error.
+  let fd;
+  try {
+    fd = fs.openSync(real, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (e) {
+    return; // ENOENT/ELOOP/etc: fail open, nothing to scrub
+  }
 
   let stat;
   try {
-    stat = fs.statSync(real);
+    stat = fs.fstatSync(fd);
   } catch (e) {
-    return; // file missing/unreadable: nothing to scrub, fail open
+    fs.closeSync(fd);
+    return;
   }
   if (stat.size > MAX_SCRUB_BYTES) {
+    fs.closeSync(fd);
     // Silent skip here would mean a file with secrets can be committed
     // unscrubbed with no record of it — a D10 telemetry gap, not just a
     // functional limit. Kind/counts only: no content, no full path.
@@ -168,15 +204,37 @@ function main() {
 
   let original;
   try {
-    original = fs.readFileSync(real, 'utf8');
+    const buf = Buffer.alloc(stat.size);
+    let read = 0;
+    while (read < buf.length) {
+      const n = fs.readSync(fd, buf, read, buf.length - read, read);
+      if (n === 0) break; // EOF short of stat.size: file shrank underneath us
+      read += n;
+    }
+    original = buf.slice(0, read).toString('utf8');
   } catch (e) {
-    return; // file missing/unreadable: nothing to scrub, fail open
+    fs.closeSync(fd);
+    return; // read failure: nothing to scrub, fail open
   }
 
   const { text, redactions } = redact.scrubSecrets(original);
-  if (text === original || !redactions.length) return; // byte-identical: no write
+  if (text === original || !redactions.length) {
+    fs.closeSync(fd);
+    return; // byte-identical: no write
+  }
 
-  fs.writeFileSync(real, text, 'utf8');
+  try {
+    const outFd = fs.openSync(real, fs.constants.O_WRONLY | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW);
+    try {
+      fs.writeSync(outFd, text, 0, 'utf8');
+    } finally {
+      fs.closeSync(outFd);
+    }
+  } catch (e) {
+    fs.closeSync(fd);
+    return; // write failure: fail open, on-disk file left as-is or partially truncated only by OS-level failure
+  }
+  fs.closeSync(fd);
 
   const counts = {};
   for (const r of redactions) counts[r.kind] = (counts[r.kind] || 0) + 1;

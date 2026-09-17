@@ -32,16 +32,27 @@ function t(name, fn) {
   }
 }
 
+// os.tmpdir() is itself behind a symlink on macOS (/tmp -> /private/tmp),
+// and may be on Linux too (a symlinked /home, worktree parent, or checkout
+// path). Realpath every fixture root up front so the suite actually
+// exercises the hook's real containment/realpath logic on every platform,
+// rather than happening to pass on Linux for the wrong reason (no symlink in
+// the path to begin with) while silently not covering the bug the D28.4
+// symlink fix and its follow-up fail-open regression fix are both about.
+function mkRealTempDir(prefix) {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
 // Makes a fresh temp project dir with one file at `relPath` containing
 // `content`, then runs the hook as if `toolName` had just written that file.
 // Returns { status, stdout, dir, absPath }.
 function run(toolName, relPath, content) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   if (content !== null) fs.writeFileSync(absPath, content, 'utf8');
 
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const payload = JSON.stringify({
     session_id: 'test-session',
     cwd: dir,
@@ -145,12 +156,12 @@ t('Edit tool target under agent-memory is also rescrubbed', () => {
 });
 
 t('MultiEdit tool target under agent-memory is also rescrubbed', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const relPath = '.claude/agent-memory/forge-implementer/x.md';
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, 'AKIAABCDEFGHIJKLMNOP\n', 'utf8');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const payload = JSON.stringify({
     session_id: 'test-session',
     cwd: dir,
@@ -179,12 +190,12 @@ t('a path.. traversal that resolves OUTSIDE agent-memory is ignored, not scrubbe
   // A relative path spelled to LOOK like it starts under .claude/agent-memory/
   // but that actually escapes it via `..` must not be treated as in-scope.
   const before = 'AKIAABCDEFGHIJKLMNOP\n';
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const relPath = 'notes/scratch.md';
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, before, 'utf8');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   // tool_input.file_path spelled as a traversal OUT of agent-memory into notes/.
   const traversal = '.claude/agent-memory/forge-implementer/../../../notes/scratch.md';
   const payload = JSON.stringify({
@@ -206,12 +217,12 @@ t('a real agent-memory write reached via a redundant .. segment is still scrubbe
   // The mirror case: a path that legitimately resolves INSIDE agent-memory,
   // just spelled with a harmless .. detour, must still be scrubbed.
   const before = 'AKIAABCDEFGHIJKLMNOP\n';
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const relPath = '.claude/agent-memory/forge-implementer/x.md';
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   fs.writeFileSync(absPath, before, 'utf8');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const spelled = '.claude/agent-memory/forge-implementer/../forge-implementer/x.md';
   const payload = JSON.stringify({
     session_id: 'test-session',
@@ -233,7 +244,7 @@ t('a symlink inside agent-memory pointing OUTSIDE it is not read or rewritten', 
   // outside/ is NOT under any MEMORY_SUBDIR. path.resolve alone would see the
   // symlink's own (in-tree) path and pass containment; only resolving the
   // REAL target with fs.realpathSync catches that it points elsewhere.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const outsideDir = path.join(dir, 'outside');
   fs.mkdirSync(outsideDir, { recursive: true });
   const externalFile = path.join(outsideDir, 'secret.md');
@@ -245,7 +256,7 @@ t('a symlink inside agent-memory pointing OUTSIDE it is not read or rewritten', 
   const linkPath = path.join(linkDir, 'note.md');
   fs.symlinkSync(externalFile, linkPath);
 
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const payload = JSON.stringify({
     session_id: 'test-session',
     cwd: dir,
@@ -262,13 +273,13 @@ t('a symlink inside agent-memory pointing OUTSIDE it is not read or rewritten', 
 });
 
 t('a file larger than the size guard is left untouched', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const relPath = '.claude/agent-memory/forge-implementer/big.md';
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   const big = 'x'.repeat(512 * 1024 + 1) + '\nAKIAABCDEFGHIJKLMNOP\n';
   fs.writeFileSync(absPath, big, 'utf8');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const payload = JSON.stringify({
     session_id: 'test-session',
     cwd: dir,
@@ -285,13 +296,13 @@ t('a file larger than the size guard is left untouched', () => {
 });
 
 t('an oversize agent-memory file records a memory_redact_skipped telemetry event', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-test-'));
+  const dir = mkRealTempDir('memory-redact-test-');
   const relPath = '.claude/agent-memory/forge-implementer/big.md';
   const absPath = path.join(dir, relPath);
   fs.mkdirSync(path.dirname(absPath), { recursive: true });
   const big = 'x'.repeat(65 * 1024) + '\nAKIAABCDEFGHIJKLMNOP\n';
   fs.writeFileSync(absPath, big, 'utf8');
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const payload = JSON.stringify({
     session_id: 'test-session',
     cwd: dir,
@@ -337,7 +348,7 @@ t('a missing file fails open (no throw, exit 0)', () => {
 });
 
 t('a malformed stdin payload fails open (no throw, exit 0)', () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-redact-data-'));
+  const dataDir = mkRealTempDir('memory-redact-data-');
   const r = spawnSync(process.execPath, [HOOK, dataDir], {
     input: 'not json at all {{{',
     encoding: 'utf8',
@@ -364,6 +375,49 @@ t('a redaction is recorded in telemetry by kind, never the secret text', () => {
   assert.strictEqual(records[0].total, 1);
   const raw = fs.readFileSync(path.join(r.dataDir, 'telemetry.jsonl'), 'utf8');
   assert.ok(!raw.includes('AKIAABCDEFGHIJKLMNOP'), 'telemetry must never contain the secret itself');
+});
+
+t('a project dir reached via a SYMLINKED path still gets its agent-memory file scrubbed (fail-open regression)', () => {
+  // Regression for the realpath-mismatch bug: the hook used to realpath the
+  // FILE (`real`) but re-check containment against the RAW, un-realpath'd
+  // projectDir. If projectDir's path has a symlinked component — exactly
+  // what happens here, and unconditionally on macOS (/tmp -> /private/tmp)
+  // — `real` comes back fully resolved while the containment root doesn't,
+  // path.relative(root, real) yields a spurious `../…`, containment reports
+  // "outside", and the hook silently skips the scrub with no telemetry at
+  // all. This test builds the project dir behind a symlink and asserts the
+  // secret IS scrubbed; before the projectDir-realpath fix this failed.
+  const realDir = mkRealTempDir('memory-redact-real-');
+  const linkParent = mkRealTempDir('memory-redact-linkparent-');
+  const symlinkedProjectDir = path.join(linkParent, 'project-via-symlink');
+  fs.symlinkSync(realDir, symlinkedProjectDir, 'dir');
+
+  const relPath = '.claude/agent-memory/forge-implementer/x.md';
+  // Write the fixture file through the REAL path (as if it already existed
+  // on disk from an earlier tool call) but tell the hook about it via the
+  // SYMLINKED project dir, the way cfg.projectDir(payload) would surface a
+  // symlinked CLAUDE_PROJECT_DIR/cwd in a real session.
+  const realAbsPath = path.join(realDir, relPath);
+  fs.mkdirSync(path.dirname(realAbsPath), { recursive: true });
+  const before = 'leaked key AKIAABCDEFGHIJKLMNOP here\n';
+  fs.writeFileSync(realAbsPath, before, 'utf8');
+
+  const symlinkedAbsPath = path.join(symlinkedProjectDir, relPath);
+  const dataDir = mkRealTempDir('memory-redact-data-');
+  const payload = JSON.stringify({
+    session_id: 'test-session',
+    cwd: symlinkedProjectDir,
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Write',
+    tool_input: { file_path: symlinkedAbsPath, content: 'x' },
+  });
+  const r = spawnSync(process.execPath, [HOOK, dataDir], {
+    input: payload, encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+  });
+  assert.strictEqual(r.status, 0);
+  const after = fs.readFileSync(realAbsPath, 'utf8');
+  assert.ok(after.includes('[REDACTED:aws-access-key]'), after);
+  assert.ok(!after.includes('AKIAABCDEFGHIJKLMNOP'), after);
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);

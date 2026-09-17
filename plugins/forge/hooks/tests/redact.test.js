@@ -232,6 +232,17 @@ t('a file with both a real secret and a prose near-match records exactly one red
   assert.strictEqual(redactions[0].kind, 'secret-assignment');
 });
 
+// Bound chosen generously (not as a tight SLA): the point of both timing
+// assertions below is "the bounded quantifiers in lib/redact.js actually
+// stop quadratic backtracking from happening at all", not "this call is
+// fast". A shared/self-hosted runner can be under arbitrary load, so a tight
+// bound (e.g. 1000ms) is flaky for reasons that have nothing to do with
+// correctness. 5000ms is still far below what real catastrophic
+// backtracking on inputs this size would take (seconds turn into minutes/
+// hours), so it remains meaningful: if the bounded quantifiers regress back
+// to unbounded ones, this will still fail.
+const REDOS_BOUND_MS = 5000;
+
 t('a long run of secret-assignment-keyword-class characters with no match does not hang (ReDoS regression)', () => {
   const input = 'a-'.repeat(262144); // 512 KiB, all in [A-Za-z0-9_-], no keyword present
   const start = process.hrtime.bigint();
@@ -239,7 +250,7 @@ t('a long run of secret-assignment-keyword-class characters with no match does n
   const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
   assert.strictEqual(text, input);
   assert.strictEqual(redactions.length, 0);
-  assert.ok(elapsedMs < 1000, `expected < 1000ms, took ${elapsedMs}ms`);
+  assert.ok(elapsedMs < REDOS_BOUND_MS, `expected < ${REDOS_BOUND_MS}ms, took ${elapsedMs}ms`);
 });
 
 t('an unterminated PEM BEGIN block does not scan to EOF (ReDoS regression)', () => {
@@ -249,7 +260,7 @@ t('an unterminated PEM BEGIN block does not scan to EOF (ReDoS regression)', () 
   const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
   assert.strictEqual(text, input, 'unterminated PEM block must be left unchanged');
   assert.strictEqual(redactions.length, 0);
-  assert.ok(elapsedMs < 1000, `expected < 1000ms, took ${elapsedMs}ms`);
+  assert.ok(elapsedMs < REDOS_BOUND_MS, `expected < ${REDOS_BOUND_MS}ms, took ${elapsedMs}ms`);
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);
