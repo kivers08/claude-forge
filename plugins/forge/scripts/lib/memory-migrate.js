@@ -10,11 +10,12 @@
 // format (D28.3) — non-destructively (the "Bluegrass rule").
 //
 // No npm dependencies (D11). No Date.now()/Math.random(): timestamps and ids
-// are supplied by the caller (scripts/migrate-agent-memory.js passes an ISO
-// `now` string and `crypto.randomUUID` is only ever called once per NEW
-// record, never re-derived). This module is a script/library invoked by a
-// human-run command, not a hook, but keeping the same discipline here means
-// it stays safe to import from a hook later without re-auditing it.
+// are supplied by the caller (plugins/forge/scripts/migrate-agent-memory.js
+// passes an ISO `now` string and `crypto.randomUUID` is only ever called
+// once per NEW record, never re-derived). This module is a script/library
+// invoked by a human-run command, not a hook, but keeping the same
+// discipline here means it stays safe to import from a hook later without
+// re-auditing it.
 //
 // Non-destructive guarantee (D28.2, "the Bluegrass rule"): a pre-existing
 // file that isn't ALREADY a valid native record is never edited in place.
@@ -27,10 +28,25 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { scrubSecrets } = require('../../plugins/forge/hooks/lib/redact');
+const { scrubSecrets } = require('../../hooks/lib/redact');
 
 const AGENT_MEMORY_DIRNAME = '.claude/agent-memory';
 const PRE_MIGRATION_DIRNAME = '_pre-migration';
+
+// Sentinel for "this frontmatter key's value could not be parsed" — a bare
+// `key:` with no inline value, where `key` isn't `metadata` (the one shape
+// that legitimately opens a nested block). This is DELIBERATELY distinct
+// from a real, parsed YAML null (`key: null`, `key: ~`, or `key:` followed
+// by nothing meaningful is otherwise indistinguishable from an intentional
+// null scalar) — the two must never collapse into the same value, or a
+// consumer can no longer tell "this really was null" from "this couldn't be
+// read at all". A key carrying this sentinel is omitted from
+// buildNativeRecord's legacy fold (never written into the migrated record as
+// `null`); the pristine original — including this key's real, unparsed-here
+// value — survives untouched in the `_pre-migration/` archive per the
+// Bluegrass rule, so nothing is actually lost, only left out of the reshaped
+// copy.
+const UNPARSED = Symbol('memory-migrate:unparsed-frontmatter-value');
 
 // Mirrors plugins/forge/hooks/memory-redact.js's MAX_SCRUB_BYTES posture: a
 // record file bigger than this is skipped and reported rather than read in
@@ -226,15 +242,25 @@ function parseRecord(raw) {
       const [, key, value] = topMatch;
       if (value.trim() === '') {
         // Bare `key:` with no inline value starts a nested block ONLY when
-        // the key is exactly `metadata` (D28.3's one nesting point);
-        // anything else with an empty value is a null scalar, not assumed
-        // to introduce deeper nesting this parser doesn't support.
+        // the key is exactly `metadata` (D28.3's one nesting point).
+        // Anything else with no inline value is NOT distinguishable from an
+        // intentional null scalar by this minimal parser (unlike `key: null`
+        // or `key: ~`, which go through parseScalar and are a deliberately
+        // parsed null) — a bare `key:` could equally be the start of a list
+        // or deeper block this parser doesn't model, whose real content sits
+        // on FOLLOWING lines this loop will now misread as unrelated
+        // top-level keys. Marking it UNPARSED (rather than guessing `null`)
+        // means buildNativeRecord omits it from the migrated record instead
+        // of writing a fabricated `null` over content that might not
+        // actually be empty; the pristine original (with the key's real
+        // value, whatever shape it is) is untouched in the pre-migration
+        // archive either way.
         if (key === 'metadata') {
           frontmatter[key] = {};
           currentNestedKey = key;
           continue;
         }
-        frontmatter[key] = null;
+        frontmatter[key] = UNPARSED;
         currentNestedKey = null;
         continue;
       }
@@ -385,7 +411,7 @@ function slugFromFilename(base) {
 // D28.3 native record ready to serialize. `now` is an ISO8601 string
 // supplied by the caller (never computed here — see header). `id` is
 // supplied by the caller too (crypto.randomUUID(), called once per file by
-// scripts/migrate-agent-memory.js) so this function stays pure/deterministic
+// plugins/forge/scripts/migrate-agent-memory.js) so this function stays pure/deterministic
 // and independently testable with fixed inputs.
 function buildNativeRecord({ frontmatter, body, scope, baseName, now, id }) {
   const type = classifyType(frontmatter);
@@ -404,14 +430,34 @@ function buildNativeRecord({ frontmatter, body, scope, baseName, now, id }) {
   // either already reflected in the canonical fields or, for a pre-existing
   // `metadata` block's OWN unrecognized keys, folded in one level down
   // rather than double-nested.
+  //
+  // A key whose value parseRecord marked UNPARSED (a bare `key:` this
+  // minimal parser couldn't read — see parseRecord) is deliberately OMITTED
+  // here rather than folded in as a fabricated `null`: writing `null` would
+  // silently misrepresent "couldn't parse this" as "this really was empty",
+  // and it's the record body/metadata a human or agent reads back later, not
+  // the archive. The real value survives regardless, untouched, in the
+  // pristine original under `_pre-migration/` (the Bluegrass rule) — nothing
+  // is lost, it's just not carried into the reshaped copy. `hadUnparsed`
+  // tracks whether this happened at all, so the caller can surface a
+  // `metadata.migrationNotes` pointer when it did.
+  let hadUnparsed = false;
   const legacy = {};
   for (const k of Object.keys(frontmatter)) {
     if (k === 'name' || k === 'description' || k === 'type' || k === 'metadata') continue;
+    if (frontmatter[k] === UNPARSED) {
+      hadUnparsed = true;
+      continue;
+    }
     legacy[k] = frontmatter[k];
   }
   if (frontmatter.metadata && typeof frontmatter.metadata === 'object') {
     for (const k of Object.keys(frontmatter.metadata)) {
       if (k === 'type') continue;
+      if (frontmatter.metadata[k] === UNPARSED) {
+        hadUnparsed = true;
+        continue;
+      }
       legacy[k] = frontmatter.metadata[k];
     }
   }
@@ -428,6 +474,14 @@ function buildNativeRecord({ frontmatter, body, scope, baseName, now, id }) {
     source: 'migrated', // provenance: this record was adapted from a pre-existing shape, not authored fresh
     supersedes: null,
   };
+  // Visible pointer (rather than a silent omission) that at least one
+  // pre-existing frontmatter key couldn't be parsed and was left out of
+  // `legacy` above — its real value is not lost, only not reflected here;
+  // the pristine original (which does hold it) is archived under
+  // `_pre-migration/`.
+  if (hadUnparsed) {
+    metadata.migrationNotes = 'unparsed frontmatter keys preserved in _pre-migration';
+  }
   // Fold legacy fields in last, so a legacy key can never overwrite a
   // canonical one above (canonical always wins on collision) but anything
   // NOT already a canonical key is still carried through losslessly.
@@ -828,6 +882,7 @@ module.exports = {
   PRE_MIGRATION_DIRNAME,
   MAX_RECORD_BYTES,
   TYPES,
+  UNPARSED,
   isValidSegment,
   resolveInside,
   archiveOriginal,

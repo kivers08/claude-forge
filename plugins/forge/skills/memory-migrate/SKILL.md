@@ -42,10 +42,9 @@ Content is never lost:
 
 ## Process
 
-1. Run `node ${CLAUDE_PLUGIN_ROOT}/../../scripts/migrate-agent-memory.js
-   --root <repo-root>` (or, inside this plugin's own repo,
-   `node scripts/migrate-agent-memory.js`). Add `--dry-run` first if the
-   human wants to preview what would change before committing to it.
+1. Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/migrate-agent-memory.js
+   --root <repo-root>`. Add `--dry-run` first if the human wants to preview
+   what would change before committing to it.
 2. Review the output: for each file, `migrate` (with a redaction count if
    any secret was scrubbed), `skip` (already native), or `error` — an unsafe
    plugin/scope directory name, a file too large to migrate (over the

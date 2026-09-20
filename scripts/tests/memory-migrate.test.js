@@ -2,8 +2,8 @@
 'use strict';
 // Fixture test for the memory-v2 adoption migration (docs/plans/memory-v2.md
 // D28.2/D28.4, unit 4): builds a temp CONSUMER repo with pre-existing agent
-// memory in NON-native shapes, runs scripts/migrate-agent-memory.js against
-// it, and asserts the D28.2 contract end to end:
+// memory in NON-native shapes, runs plugins/forge/scripts/migrate-agent-memory.js
+// against it, and asserts the D28.2 contract end to end:
 //   - content is preserved (nothing lost — the "Bluegrass rule"),
 //   - records now live in native format (D28.3) at the right paths,
 //   - pristine originals are archived under `_pre-migration/`, never deleted,
@@ -12,15 +12,15 @@
 //   - a secret in a source file is scrubbed in the migrated record.
 // Plain Node asserts, no dependencies (D11). Spawns the CLI as a subprocess
 // (matching how plugins/forge/hooks/tests/run.js exercises hooks) so this
-// also covers scripts/migrate-agent-memory.js's own argv/exit-code surface,
-// not just the library.
+// also covers plugins/forge/scripts/migrate-agent-memory.js's own
+// argv/exit-code surface, not just the library.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const CLI = path.join(__dirname, '..', 'migrate-agent-memory.js');
+const CLI = path.join(__dirname, '..', '..', 'plugins', 'forge', 'scripts', 'migrate-agent-memory.js');
 
 let failed = 0;
 let ran = 0;
@@ -122,7 +122,7 @@ t('exits 0 and reports counts on first run', () => {
 t('migrated records are in native D28.3 format at the original path', () => {
   const dir = buildFixture();
   run(dir);
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
 
   const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
   const plainRaw = fs.readFileSync(plainPath, 'utf8');
@@ -286,7 +286,7 @@ t('one scope with a containment-violating planted symlink does not abort the who
   assert.match(r.stdout, /2 migrated, 1 skipped, 1 errored/);
 
   // The good scope still migrated despite the other scope's poisoned file.
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
   const plainParsed = engine.parseRecord(fs.readFileSync(plainPath, 'utf8'));
   assert.ok(engine.isNativeRecord(plainParsed.frontmatter), 'the good scope must still be migrated to a native record');
@@ -301,7 +301,7 @@ t('one scope with a containment-violating planted symlink does not abort the who
 });
 
 t('yamlScalar/parseScalar round-trip a value containing an embedded newline byte-stable', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const record = {
     name: 'multi-line\nname value',
     description: 'line one\nline two\r\nline three',
@@ -324,7 +324,7 @@ t('yamlScalar/parseScalar round-trip a value containing an embedded newline byte
 });
 
 t('BUG 1: yamlScalar ALWAYS double-quotes a string scalar, so it round-trips through ANY real YAML reader and this module\'s own parseScalar', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   // This predicate used to conditionally quote based on a growing list of
   // "looks ambiguous to a real YAML reader" shapes, and reviewers kept
   // finding another edge case a standards-compliant YAML 1.1/1.2 parser
@@ -379,7 +379,7 @@ t('BUG 1: yamlScalar ALWAYS double-quotes a string scalar, so it round-trips thr
 });
 
 t('BUG 1: end-to-end — a fully-redacted name stays idempotent and re-reads as a string', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const redactedName = '[REDACTED:aws-access-key]'; // exactly what scrubRecordFields produces for a fully-redacted name
   const record = {
     name: redactedName,
@@ -407,7 +407,7 @@ t('BUG 1: end-to-end — a fully-redacted name stays idempotent and re-reads as 
 });
 
 t('a literal two-character backslash-n round-trips correctly (never misread as an escaped newline)', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const literal = 'path is C:\\notes\\readme and a real\nnewline too';
   const record = {
     name: 'literal-backslash-n',
@@ -421,7 +421,7 @@ t('a literal two-character backslash-n round-trips correctly (never misread as a
 });
 
 t('MEMORY.md dedup regex ignores a ](other.md) link embedded in hook prose', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -460,7 +460,7 @@ t('MEMORY.md dedup regex ignores a ](other.md) link embedded in hook prose', () 
 // ---- regression tests: whole-diff review fixes -----------------------------
 
 t('BUG 1: archiveOriginal never clobbers an existing archive entry — two different originals at the same archive path both survive under distinct names', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const archiveDest = path.join(dir, 'archive', 'note.md');
   const srcA = write(dir, 'src-a.md', 'first original content\n');
@@ -507,7 +507,7 @@ t('BUG 1 (end to end): re-adding a note at a previously-migrated path and re-run
 });
 
 t('BUG 2: yamlScalar/parseScalar round-trip numeric/bool/null-LOOKING strings as the same string', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   for (const s of ['0001', '123', '-5', '3.14', 'null', 'true', 'false', '~', '']) {
     const serialized = engine.yamlScalar(s);
     const parsed = engine.parseScalar(serialized);
@@ -524,7 +524,7 @@ t('BUG 2 (end to end): a record named 0001.md is idempotent — second migration
 
   const filePath = path.join(dir, '.claude/agent-memory/forge-implementer/0001.md');
   const afterFirstRun = fs.readFileSync(filePath, 'utf8');
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const parsed = engine.parseRecord(afterFirstRun);
   assert.strictEqual(typeof parsed.frontmatter.name, 'string', 'name must stay a string, not be coerced to a number');
   assert.ok(engine.isNativeRecord(parsed.frontmatter), 'must be classified native after the first run');
@@ -551,7 +551,7 @@ t('BUG 3: an already-native record with CRLF line endings is detected native and
   ].join('\r\n');
   const filePath = write(dir, '.claude/agent-memory/forge-implementer/crlf-native.md', crlfRecord);
 
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const parsed = engine.parseRecord(crlfRecord);
   assert.ok(engine.isNativeRecord(parsed.frontmatter), 'a CRLF native record must be recognized as native by the parser directly');
 
@@ -712,7 +712,7 @@ t('BUG 5: an unreadable file is reported as a per-file error and the OTHER scope
       assert.match(r.stderr, /ERROR forge-unreadable[/\\]secret\.md:/);
     }
     // Regardless, the other (good) scope must still have migrated.
-    const engine = require('../lib/memory-migrate');
+    const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
     const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
     const plainParsed = engine.parseRecord(fs.readFileSync(plainPath, 'utf8'));
     assert.ok(engine.isNativeRecord(plainParsed.frontmatter), 'other scopes must still migrate despite an unreadable file elsewhere');
@@ -723,7 +723,7 @@ t('BUG 5: an unreadable file is reported as a per-file error and the OTHER scope
 
 t('BUG 5: an oversize file is reported as a per-file error and the OTHER scopes still migrate', () => {
   const dir = buildFixture();
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const big = 'x'.repeat(engine.MAX_RECORD_BYTES + 1024);
   write(dir, '.claude/agent-memory/forge-oversize/big.md', big);
 
@@ -793,7 +793,7 @@ t('a run with no secrets does not print the redaction WARNING', () => {
 // ---- regression test: index-link corruption from the index-scrub ----------
 
 t('BUG 7: buildMemoryIndex keeps a resolvable link target for a secret-shaped filename, while the record\'s own title/hook text is scrubbed', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -841,7 +841,7 @@ t('BUG 7: buildMemoryIndex keeps a resolvable link target for a secret-shaped fi
 // ---- regression test: FIX D — a bracketed/multiline title breaks the link -
 
 t('FIX D: a record title containing brackets and a newline produces a valid, resolvable index link', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -919,7 +919,7 @@ t('FIX E: a migrated record with a secret-shaped filename triggers a WARNING nam
 });
 
 t('BUG 7: a pre-existing hub line with a secret in its hook is scrubbed while its link target is preserved', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -953,7 +953,7 @@ t('BUG 7: a pre-existing hub line with a secret in its hook is scrubbed while it
 });
 
 t('BUG 2: a pre-existing hub line with a link but NO hook at all keeps its link target', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -991,7 +991,7 @@ t('BUG 2: a pre-existing hub line with a link but NO hook at all keeps its link 
 });
 
 t('BUG 2: a pre-existing hub line using a non-em-dash separator scrubs the hook but keeps the link target', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const dir = mkRepo();
   const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
   fs.mkdirSync(scopeDir, { recursive: true });
@@ -1027,7 +1027,7 @@ t('BUG 2: a pre-existing hub line using a non-em-dash separator scrubs the hook 
 // ---- regression tests: parseRecord keyless-frontmatter content loss -------
 
 t('BUG 8: a plain-markdown body containing its own "---" line is not misparsed as frontmatter, content preserved', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   // No LEADING `---` at all, so the very first line is plain prose — the
   // file never even reaches the frontmatter-block code path. This is here
   // as a baseline sanity check alongside the trickier keyless-block case
@@ -1039,7 +1039,7 @@ t('BUG 8: a plain-markdown body containing its own "---" line is not misparsed a
 });
 
 t('BUG 8: a leading `---`...`---` block with ZERO recognized keys is treated as plain markdown, content preserved intact', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   // Starts with `---` (thematic break) and a body that itself contains
   // ANOTHER `---` line further down. Before the fix, the space between the
   // two `---` lines would be misread as a (vacuous) frontmatter block —
@@ -1074,7 +1074,7 @@ t('BUG 8: a leading `---`...`---` block with ZERO recognized keys is treated as 
 });
 
 t('BUG 8: closing terminator must be its own line — a "---" merely prefixing a longer body line is not treated as the close', () => {
-  const engine = require('../lib/memory-migrate');
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
   const raw = [
     '---',
     'name: has-real-frontmatter',
@@ -1091,6 +1091,73 @@ t('BUG 8: closing terminator must be its own line — a "---" merely prefixing a
   // preservation rather than parsing a truncated/wrong frontmatter block.
   assert.deepStrictEqual(parsed.frontmatter, {});
   assert.strictEqual(parsed.body, raw, 'entire file must be preserved verbatim when no valid closing delimiter exists');
+});
+
+t('FIDELITY: a bare unparseable frontmatter key is marked UNPARSED, not null', () => {
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
+  const raw = [
+    '---',
+    'name: has-a-bare-key',
+    'description: A record with an unparseable bare key',
+    'weird_field:',
+    '---',
+    '',
+    'Body text.',
+    '',
+  ].join('\n');
+  const parsed = engine.parseRecord(raw);
+  assert.strictEqual(parsed.frontmatter['weird_field'], engine.UNPARSED, 'a bare non-metadata key must be the UNPARSED sentinel, not null');
+});
+
+t('FIDELITY: an unparsed bare key is OMITTED (not null) from the migrated record, with a migrationNotes flag; content still preserved in the archive', () => {
+  const dir = mkRepo();
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/bare-key.md',
+    [
+      '---',
+      'name: bare-key-note',
+      'description: A note with an unparseable bare key',
+      'weird_field:',
+      'author: legacy-system',
+      '---',
+      '',
+      'Body content that must survive.',
+      '',
+    ].join('\n')
+  );
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+
+  const engine = require('../../plugins/forge/scripts/lib/memory-migrate');
+  const migratedPath = path.join(dir, '.claude/agent-memory/forge-implementer/bare-key.md');
+  const migratedRaw = fs.readFileSync(migratedPath, 'utf8');
+  const migratedParsed = engine.parseRecord(migratedRaw);
+  assert.ok(engine.isNativeRecord(migratedParsed.frontmatter));
+
+  // The unparsed key must be OMITTED entirely — never present as `null`.
+  assert.ok(
+    !('weird_field' in migratedParsed.frontmatter.metadata),
+    'unparsed key must be omitted from the migrated record, not written as null'
+  );
+  // A recognized/parseable legacy key on the same record migrates normally.
+  assert.strictEqual(migratedParsed.frontmatter.metadata.author, 'legacy-system');
+  // The omission must be visible via a migrationNotes flag.
+  assert.strictEqual(
+    migratedParsed.frontmatter.metadata.migrationNotes,
+    'unparsed frontmatter keys preserved in _pre-migration'
+  );
+
+  // Body content still preserved in the live record.
+  assert.match(migratedRaw, /Body content that must survive\./);
+
+  // The pristine original — including the real (unparsed-here) value of
+  // weird_field, whatever it was — survives untouched in the archive.
+  const archivedPath = path.join(dir, '.claude/agent-memory/_pre-migration/forge-implementer/bare-key.md');
+  assert.ok(fs.existsSync(archivedPath), 'pristine original must be archived');
+  const archivedRaw = fs.readFileSync(archivedPath, 'utf8');
+  assert.match(archivedRaw, /weird_field:/);
+  assert.match(archivedRaw, /Body content that must survive\./);
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);

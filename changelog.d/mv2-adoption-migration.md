@@ -1,5 +1,5 @@
 section: Added
-- `scripts/lib/memory-migrate.js` — the memory-v2 adoption migration engine
+- `plugins/forge/scripts/lib/memory-migrate.js` — the memory-v2 adoption migration engine
   (D28.2/D28.4): adapts a repo's pre-existing agent memory/lessons, in any
   prior shape (plain markdown, flat/legacy frontmatter, or a mix), into the
   native `.claude/agent-memory/<plugin>-<agent>/` record format (D28.3),
@@ -19,7 +19,7 @@ section: Added
   containing ` #` (would truncate at an unintended comment) — so a migrated
   record stays correctly readable by native Claude Code and any other YAML
   tool, not just by this engine's own parser.
-- `scripts/migrate-agent-memory.js` — the `forge memory migrate` CLI
+- `plugins/forge/scripts/migrate-agent-memory.js` — the `forge memory migrate` CLI
   (`--root <dir>`, `--dry-run`). Supersedes the unit-1 seed of the same name
   (never merged; depended on the since-retired custom `lib/memory.js`
   storage engine) with a generalized, install-time capable version that

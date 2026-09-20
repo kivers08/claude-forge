@@ -2,7 +2,7 @@
 'use strict';
 // forge memory migrate (docs/plans/memory-v2.md D28.2/D28.4, unit 4).
 //
-// Thin CLI wrapper over scripts/lib/memory-migrate.js's engine: adapts a
+// Thin CLI wrapper over ./lib/memory-migrate.js's engine: adapts a
 // repo's pre-existing `.claude/agent-memory/**` files — in ANY prior shape,
 // including a repo adopting forge for the first time — into the native
 // memory-v2 record format (D28.3), non-destructively.
@@ -24,11 +24,11 @@
 // automatically from a hook or on SessionStart.
 //
 // Usage:
-//   node scripts/migrate-agent-memory.js [--dry-run] [--root <dir>]
+//   node ${CLAUDE_PLUGIN_ROOT}/scripts/migrate-agent-memory.js [--dry-run] [--root <dir>]
 // FORGE_REPO_ROOT (or --root) points at the target repo; defaults to the
 // current working directory (NOT one level up from this script — a consumer
-// repo runs this against ITSELF, typically via a copy of this file or the
-// plugin's own script path with --root pointed at the adopting project).
+// repo runs this against ITSELF, via the forge plugin's own script path with
+// --root pointed at the adopting project).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
