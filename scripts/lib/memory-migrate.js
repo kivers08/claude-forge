@@ -465,7 +465,19 @@ function buildMemoryIndex(scopeDir, recordFiles) {
     } catch (e) {
       // keep the filename-derived fallback
     }
-    newLines.push(`- [${title}](${file}) — ${hook}`);
+    // §3.4: scrub the human-text fields (title/hook) INDIVIDUALLY, never the
+    // link target. `file` is the record's own on-disk basename (already
+    // filename-safe, derived from its id/slug) and must stay a valid link —
+    // scrubbing it here would rewrite a secret-shaped filename (e.g. a
+    // source record literally named `AKIA....md`) into a redaction
+    // placeholder, breaking the link while leaving the real file unlinked
+    // and invisible to native hub reads. See buildNativeRecord's
+    // scrubRecordFields, which scrubs fields separately for the same reason.
+    let totalRedactions = 0;
+    const scrubTitle = scrubSecrets(title);
+    const scrubHook = scrubSecrets(hook);
+    totalRedactions += scrubTitle.redactions.length + scrubHook.redactions.length;
+    newLines.push({ line: `- [${scrubTitle.text}](${file}) — ${scrubHook.text}`, redactions: totalRedactions });
   }
   if (newLines.length === 0) return { changed: false, redactions: 0 };
   // Only drop TRAILING blank lines (so new entries append cleanly after
@@ -476,19 +488,38 @@ function buildMemoryIndex(scopeDir, recordFiles) {
   let lastNonBlank = existingLines.length - 1;
   while (lastNonBlank >= 0 && existingLines[lastNonBlank].trim() === '') lastNonBlank--;
   const body = existingLines.slice(0, lastNonBlank + 1);
-  const finalLines = body.concat(newLines);
-  // §3.4: every write runs through the redaction scrubber first. Without
-  // this, a secret in a pre-existing hand-authored MEMORY.md line (never
-  // scrubbed elsewhere, since migrateScopeDir explicitly skips MEMORY.md as
-  // "not a record") or in an already-native record's own description
-  // (title/hook here are read straight off the skip-path record's
-  // frontmatter, which this engine never scrubs since a native record is
-  // left completely untouched) would be written straight into the
-  // rewritten index unredacted.
+  // §3.4: every write runs through the redaction scrubber first. A secret in
+  // a pre-existing hand-authored MEMORY.md line (never scrubbed elsewhere,
+  // since migrateScopeDir explicitly skips MEMORY.md as "not a record") must
+  // still not survive into the rewritten index. But scrubbing the WHOLE
+  // assembled markdown (as before) rewrites link TARGETS too: a pre-existing
+  // entry line whose file target happens to be secret-shaped gets its link
+  // corrupted the same way a freshly-built entry would. So each carried-
+  // through line is parsed for the `- [title](target) — hook` entry shape
+  // (same anchor as the `indexedFiles` scan above); when it matches, title
+  // and hook are scrubbed individually and the target is left alone, exactly
+  // like the newly-built entries above. A line that doesn't match that shape
+  // is arbitrary human prose (not a link entry) with no target to protect,
+  // so it is scrubbed whole, same as before.
+  let redactionCount = 0;
+  const scrubbedBody = body.map((line) => {
+    const m = /^(\s*-\s*\[)([^\]]*)(\]\()([^)]+\.md)(\)\s*—\s*)(.*)$/.exec(line);
+    if (m) {
+      const [, pre, title, mid, target, sep, hook] = m;
+      const st = scrubSecrets(title);
+      const sh = scrubSecrets(hook);
+      redactionCount += st.redactions.length + sh.redactions.length;
+      return `${pre}${st.text}${mid}${target}${sep}${sh.text}`;
+    }
+    const { text, redactions } = scrubSecrets(line);
+    redactionCount += redactions.length;
+    return text;
+  });
+  for (const entry of newLines) redactionCount += entry.redactions;
+  const finalLines = scrubbedBody.concat(newLines.map((e) => e.line));
   const assembled = finalLines.join('\n') + '\n';
-  const { text: scrubbed, redactions } = scrubSecrets(assembled);
-  writeFileAtomic(indexPath, scrubbed);
-  return { changed: true, redactions: redactions.length };
+  writeFileAtomic(indexPath, assembled);
+  return { changed: true, redactions: redactionCount };
 }
 
 // ---- orchestration ----------------------------------------------------------

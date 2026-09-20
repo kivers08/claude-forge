@@ -642,5 +642,87 @@ t('a run with no secrets does not print the redaction WARNING', () => {
   assert.ok(!/WARNING/.test(r.stdout), 'no WARNING should print when nothing was redacted');
 });
 
+// ---- regression test: index-link corruption from the index-scrub ----------
+
+t('BUG 7: buildMemoryIndex keeps a resolvable link target for a secret-shaped filename, while the record\'s own title/hook text is scrubbed', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  // The on-disk record's basename is shaped exactly like an AWS access key
+  // id (e.g. because slugFromFilename/the caller preserved the original
+  // basename per the "links/paths already pointing at it stay valid"
+  // contract). Its own frontmatter name/description ALSO carry the secret
+  // verbatim (unlike the lower-cased-slug case, a record can legitimately
+  // have a case-preserved name from a pre-existing `name:` field). Before
+  // the fix, scrubbing the WHOLE assembled index markdown would rewrite
+  // this link's TARGET (the filename) into a [REDACTED:...] token, leaving
+  // the real on-disk record unlinked/invisible while the index pointed at
+  // a file that doesn't exist.
+  const fileName = `${SECRET}.md`;
+  write(
+    dir,
+    `.claude/agent-memory/forge-implementer/${fileName}`,
+    [
+      '---',
+      `name: ${SECRET}`,
+      `description: leaked key ${SECRET} in this record`,
+      'metadata:',
+      '  type: project',
+      '  id: 66666666-6666-6666-6666-666666666666',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, [fileName]);
+  assert.strictEqual(result.changed, true);
+  assert.ok(result.redactions >= 1, 'the secret in title/hook must be counted as a redaction');
+
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  const m = /^-\s*\[(.*)\]\(([^)]+\.md)\)\s*—\s*(.*)$/m.exec(index);
+  assert.ok(m, `index must contain a well-formed entry line, got: ${index}`);
+  const [, title, target, hook] = m;
+  assert.strictEqual(target, fileName, 'index link target must point at the real on-disk record filename, unscrubbed');
+  assert.ok(fs.existsSync(path.join(scopeDir, target)), 'the linked target file must actually exist');
+  assert.ok(!title.includes(SECRET), 'title text must be scrubbed');
+  assert.ok(!hook.includes(SECRET), 'hook text must be scrubbed');
+});
+
+t('BUG 7: a pre-existing hub line with a secret in its hook is scrubbed while its link target is preserved', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/MEMORY.md',
+    `- [existing-note](existing.md) — leaked key ${SECRET} in this hook\n`
+  );
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/real.md',
+    [
+      '---',
+      'name: real-record',
+      'description: A real migrated record',
+      'metadata:',
+      '  type: project',
+      '  id: 55555555-5555-5555-5555-555555555555',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, ['real.md']);
+  assert.strictEqual(result.changed, true);
+  assert.ok(result.redactions >= 1, 'the pre-existing line secret must be counted as a redaction');
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  assert.match(index, /\(existing\.md\)/, 'pre-existing entry link target must be preserved, not rewritten');
+  assert.ok(!index.includes(SECRET), 'the secret must not survive in the rewritten index');
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);
