@@ -256,6 +256,51 @@ unit 1's hook; the rest is retired.
 
 ---
 
+## D28.5 — STATUS: core SHIPPED, Unit 4 (adoption migration) PARKED (2026-09-19)
+
+**On `main`:** the memory-v2 CORE (D28.1–D28.4) — redaction-on-write hook,
+reviewer memory safety, agent-memory docs, record schema (D28.3), CI
+optimization. Solid and shipped.
+
+**PARKED (owner decision):** Unit 4 — adoption migration (D28.2), the
+`forge memory migrate` capability. Held off `main` per an agreed "park if another
+genuine logic/data-loss/leak surfaces" rule; the blocker is a **design decision,
+not a patch.**
+
+**Where the latest Unit 4 code lives:** branch **`claude/mv2-u4-to-main` @
+`c6341c4`** (PR #16, draft = the parked tracker). Engine RELOCATED into the
+plugin: `plugins/forge/scripts/lib/memory-migrate.js` +
+`plugins/forge/scripts/migrate-agent-memory.js`; skill invokes
+`${CLAUDE_PLUGIN_ROOT}/scripts/migrate-agent-memory.js`. **Resume from THAT
+branch, not this epic** — the epic's Unit 4 (through PR #15) predates the
+relocation + always-quote + provenance + keyless-fidelity fixes.
+
+**#5 — BLOCKING design decision (resolve first):** the pristine `_pre-migration/`
+archive is written INSIDE `.claude/agent-memory/` — the committed tree redaction
+exists to keep secrets out of. Migrating a secret-bearing file thus commits the
+RAW secret to a new tracked path. "Preserve pristine original (Bluegrass rule)"
+vs "never commit secrets." Decide: archive OUTSIDE the repo / gitignore
+`_pre-migration/` / don't-archive files with detected secrets (warn human) /
+scrub-the-archive (violates pristine).
+
+**Other outstanding findings on `c6341c4`:** #4 per-field metadata scrubbing lost
+the `key:value` context the `secret-assignment` pattern needs (redaction
+regression — scrub with key restored, then strip prefix); #3 unknown/typo'd CLI
+flag silently ignored → real rewrite (reject unknown flags); #1 bare key inside
+`metadata:` becomes `null` not the `UNPARSED` sentinel (mirror the top-level fix
+into the nested branch); #2 unrecognized frontmatter lines dropped without
+setting `metadata.migrationNotes`; #6 `source: migrated` not in the
+`authored|learning-block|ambient` vocab (add `migrated` here or use `authored`);
+#7 already-native records don't gain `metadata.*` ranking fields.
+
+**Re-integration gotcha:** `main`'s `plugins/forge/hooks/memory-redact.js` has
+the bug-6 atomic-write (temp+rename) fix; the epic's copy is older. Ship Unit 4
+by overlaying ONLY its files onto `main` (the pattern PR #16 used) — do NOT squash
+the whole epic or memory-redact.js regresses. Superseded PRs #6 (epic parent) and
+#7 (retired storage engine) are closed.
+
+---
+
 ## 1. Take from PMB (build native equivalents)
 
 | PMB idea | Native form in forge | Justification |
