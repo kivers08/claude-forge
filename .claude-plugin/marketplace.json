@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Private marketplace for the forge plugin and its smoke-test plugin.",
-    "version": "0.0.1"
+    "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "forge",
       "source": "./plugins/forge",
       "description": "Private coordination framework: guard hooks, worker agents, and workflow skills.",
-      "version": "0.0.1"
+      "version": "0.1.0"
     },
     {
       "name": "smoke",
