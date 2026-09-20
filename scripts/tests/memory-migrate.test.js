@@ -374,5 +374,273 @@ t('MEMORY.md dedup regex ignores a ](other.md) link embedded in hook prose', () 
   assert.match(index, /\(real\.md\)/);
 });
 
+// ---- regression tests: whole-diff review fixes -----------------------------
+
+t('BUG 1: archiveOriginal never clobbers an existing archive entry — two different originals at the same archive path both survive under distinct names', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const archiveDest = path.join(dir, 'archive', 'note.md');
+  const srcA = write(dir, 'src-a.md', 'first original content\n');
+  const usedA = engine.archiveOriginal(srcA, archiveDest);
+  assert.strictEqual(usedA, archiveDest, 'first archive uses the exact requested path');
+  assert.strictEqual(fs.readFileSync(archiveDest, 'utf8'), 'first original content\n');
+
+  const srcB = write(dir, 'src-b.md', 'second original content\n');
+  const usedB = engine.archiveOriginal(srcB, archiveDest);
+  assert.notStrictEqual(usedB, archiveDest, 'second archive must use a non-colliding sibling path');
+  assert.ok(fs.existsSync(usedB));
+  // Both survive, byte-identical to their own source, neither clobbered.
+  assert.strictEqual(fs.readFileSync(archiveDest, 'utf8'), 'first original content\n');
+  assert.strictEqual(fs.readFileSync(usedB, 'utf8'), 'second original content\n');
+});
+
+t('BUG 1 (end to end): re-adding a note at a previously-migrated path and re-running migration does not destroy the first archived original', () => {
+  const dir = buildFixture();
+  run(dir); // migrates plain-lesson.md, archives it under _pre-migration/
+
+  const archivedPath = path.join(dir, '.claude/agent-memory/_pre-migration/forge-implementer/plain-lesson.md');
+  const firstArchiveContent = fs.readFileSync(archivedPath, 'utf8');
+  assert.ok(firstArchiveContent.includes(SECRET), 'sanity: first archive holds the original pristine content');
+
+  // A human deletes the migrated native record and re-adds a DIFFERENT
+  // plain-markdown note at the same original path, then re-runs migration.
+  const livePath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
+  fs.writeFileSync(livePath, '# A different second note\n\nCompletely different content.\n', 'utf8');
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+
+  // The FIRST archived original must be untouched, byte-identical.
+  assert.strictEqual(fs.readFileSync(archivedPath, 'utf8'), firstArchiveContent, 'first archive must survive unclobbered');
+  // The second original must ALSO be archived somewhere, not lost — as a
+  // non-colliding SIBLING of plain-lesson.md specifically (the archive dir
+  // also legitimately holds flat.md's own archive from the first run, so
+  // the search must be scoped to plain-lesson's own sibling naming, not
+  // "any other file in the directory").
+  const archiveDir = path.join(dir, '.claude/agent-memory/_pre-migration/forge-implementer');
+  const archivedNames = fs.readdirSync(archiveDir);
+  const secondArchiveName = archivedNames.find((n) => /^plain-lesson\.\d+\.md$/.test(n));
+  assert.ok(secondArchiveName, `a non-colliding sibling archive name must exist for the second original; found: ${archivedNames.join(', ')}`);
+  assert.match(fs.readFileSync(path.join(archiveDir, secondArchiveName), 'utf8'), /Completely different content\./);
+});
+
+t('BUG 2: yamlScalar/parseScalar round-trip numeric/bool/null-LOOKING strings as the same string', () => {
+  const engine = require('../lib/memory-migrate');
+  for (const s of ['0001', '123', '-5', '3.14', 'null', 'true', 'false', '~', '']) {
+    const serialized = engine.yamlScalar(s);
+    const parsed = engine.parseScalar(serialized);
+    assert.strictEqual(parsed, s, `yamlScalar(${JSON.stringify(s)}) -> ${serialized} must parse back as the string, got ${JSON.stringify(parsed)}`);
+  }
+});
+
+t('BUG 2 (end to end): a record named 0001.md is idempotent — second migration run is a no-op, not re-migrated', () => {
+  const dir = mkRepo();
+  write(dir, '.claude/agent-memory/forge-implementer/0001.md', '# Numeric-looking slug\n\nSome content.\n');
+  const r1 = run(dir);
+  assert.strictEqual(r1.status, 0, `stderr: ${r1.stderr}`);
+  assert.match(r1.stdout, /1 migrated, 0 skipped, 0 errored/);
+
+  const filePath = path.join(dir, '.claude/agent-memory/forge-implementer/0001.md');
+  const afterFirstRun = fs.readFileSync(filePath, 'utf8');
+  const engine = require('../lib/memory-migrate');
+  const parsed = engine.parseRecord(afterFirstRun);
+  assert.strictEqual(typeof parsed.frontmatter.name, 'string', 'name must stay a string, not be coerced to a number');
+  assert.ok(engine.isNativeRecord(parsed.frontmatter), 'must be classified native after the first run');
+
+  const r2 = run(dir);
+  assert.strictEqual(r2.status, 0, `stderr: ${r2.stderr}`);
+  assert.match(r2.stdout, /0 migrated, 1 skipped, 0 errored/, 'second run must be a no-op, not re-migrate');
+  assert.strictEqual(fs.readFileSync(filePath, 'utf8'), afterFirstRun, 'file must be byte-identical after the no-op second run');
+});
+
+t('BUG 3: an already-native record with CRLF line endings is detected native and left untouched', () => {
+  const dir = mkRepo();
+  const crlfRecord = [
+    '---',
+    'name: crlf-native',
+    'description: Already native, CRLF line endings',
+    'metadata:',
+    '  type: project',
+    '  id: 77777777-7777-7777-7777-777777777777',
+    '---',
+    '',
+    'CRLF body content.',
+    '',
+  ].join('\r\n');
+  const filePath = write(dir, '.claude/agent-memory/forge-implementer/crlf-native.md', crlfRecord);
+
+  const engine = require('../lib/memory-migrate');
+  const parsed = engine.parseRecord(crlfRecord);
+  assert.ok(engine.isNativeRecord(parsed.frontmatter), 'a CRLF native record must be recognized as native by the parser directly');
+
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  assert.match(r.stdout, /0 migrated, 1 skipped, 0 errored/, 'CRLF native record must be skipped, not migrated');
+  assert.strictEqual(fs.readFileSync(filePath, 'utf8'), crlfRecord, 'CRLF native record must not be rewritten a single byte');
+
+  const archivedPath = path.join(dir, '.claude/agent-memory/_pre-migration/forge-implementer/crlf-native.md');
+  assert.ok(!fs.existsSync(archivedPath), 'a native record (CRLF or not) must never be archived');
+});
+
+t('SECURITY: a secret in a pre-existing MEMORY.md does not survive into the rewritten index', () => {
+  const dir = buildFixture();
+  const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  fs.writeFileSync(indexPath, `- [old note](old.md) — pre-existing entry with a leaked key ${SECRET}\n`, 'utf8');
+
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  const index = fs.readFileSync(indexPath, 'utf8');
+  assert.ok(!index.includes(SECRET), 'secret from a pre-existing MEMORY.md line must not survive into the rewritten index');
+  assert.match(index, /\[REDACTED:aws-access-key\]/);
+});
+
+t('SECURITY: a secret in an already-native record\'s description does not survive into the index', () => {
+  const dir = mkRepo();
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/native-with-secret.md',
+    [
+      '---',
+      'name: native-with-secret',
+      `description: Has a secret ${SECRET} in the description`,
+      'metadata:',
+      '  type: project',
+      '  id: 88888888-8888-8888-8888-888888888888',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
+  assert.ok(fs.existsSync(indexPath), 'index must be created since a native record needs indexing');
+  const index = fs.readFileSync(indexPath, 'utf8');
+  assert.ok(!index.includes(SECRET), 'secret from an already-native record\'s description must not survive into the index');
+  assert.match(index, /\[REDACTED:aws-access-key\]/);
+
+  // The native record file itself is untouched (still holds the raw
+  // secret) — only the INDEX write is scrubbed, matching the Bluegrass
+  // rule that an already-native record is never rewritten.
+  const nativeRaw = fs.readFileSync(
+    path.join(dir, '.claude/agent-memory/forge-implementer/native-with-secret.md'),
+    'utf8'
+  );
+  assert.ok(nativeRaw.includes(SECRET), 'the native record itself must remain byte-identical (not rewritten)');
+});
+
+t('BUG 4: a pre-existing hub with internal blank lines keeps them after a migration run', () => {
+  const dir = buildFixture();
+  const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  const existingContent = '# Memory Hub\n\n- [old note](old.md) — an existing entry\n\n## Section two\n\nSome prose.\n';
+  fs.writeFileSync(indexPath, existingContent, 'utf8');
+
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  const index = fs.readFileSync(indexPath, 'utf8');
+  assert.match(index, /# Memory Hub\n\n- \[old note\]\(old\.md\) — an existing entry\n\n## Section two\n\nSome prose\./, 'internal blank lines and structure must be preserved verbatim');
+});
+
+t('BUG 5: an unreadable file is reported as a per-file error and the OTHER scopes still migrate', () => {
+  const dir = buildFixture();
+  const unreadablePath = write(dir, '.claude/agent-memory/forge-unreadable/secret.md', '# Cannot read this\n');
+  fs.chmodSync(unreadablePath, 0o000);
+  try {
+    const r = run(dir);
+    // Root may still run as a privileged user in some CI sandboxes where
+    // chmod 000 doesn't actually block reads; only assert the strong
+    // per-scope-resilience claim when the read genuinely failed.
+    let readBlocked = true;
+    try {
+      fs.readFileSync(unreadablePath, 'utf8');
+      readBlocked = false;
+    } catch (e) {
+      readBlocked = true;
+    }
+    if (readBlocked) {
+      assert.strictEqual(r.status, 1, `expected non-zero exit due to the unreadable-file error; stderr: ${r.stderr}`);
+      assert.match(r.stderr, /ERROR forge-unreadable[/\\]secret\.md:/);
+    }
+    // Regardless, the other (good) scope must still have migrated.
+    const engine = require('../lib/memory-migrate');
+    const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
+    const plainParsed = engine.parseRecord(fs.readFileSync(plainPath, 'utf8'));
+    assert.ok(engine.isNativeRecord(plainParsed.frontmatter), 'other scopes must still migrate despite an unreadable file elsewhere');
+  } finally {
+    fs.chmodSync(unreadablePath, 0o644);
+  }
+});
+
+t('BUG 5: an oversize file is reported as a per-file error and the OTHER scopes still migrate', () => {
+  const dir = buildFixture();
+  const engine = require('../lib/memory-migrate');
+  const big = 'x'.repeat(engine.MAX_RECORD_BYTES + 1024);
+  write(dir, '.claude/agent-memory/forge-oversize/big.md', big);
+
+  const r = run(dir);
+  assert.strictEqual(r.status, 1, `expected non-zero exit due to the oversize-file error; stderr: ${r.stderr}`);
+  assert.match(r.stderr, /ERROR forge-oversize[/\\]big\.md:.*too large/);
+
+  // The oversize file is left completely untouched (never archived, never
+  // rewritten) since it was rejected before any read/migration attempt.
+  const bigPath = path.join(dir, '.claude/agent-memory/forge-oversize/big.md');
+  assert.strictEqual(fs.readFileSync(bigPath, 'utf8'), big);
+  const archivedBig = path.join(dir, '.claude/agent-memory/_pre-migration/forge-oversize/big.md');
+  assert.ok(!fs.existsSync(archivedBig), 'an oversize file must never be archived');
+
+  // Other scopes still migrate.
+  const plainPath = path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md');
+  const plainParsed = engine.parseRecord(fs.readFileSync(plainPath, 'utf8'));
+  assert.ok(engine.isNativeRecord(plainParsed.frontmatter), 'other scopes must still migrate despite an oversize file elsewhere');
+});
+
+t('BUG 6: --root with no following value exits non-zero and writes nothing', () => {
+  const dir = buildFixture();
+  const before = fs.readFileSync(path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md'), 'utf8');
+  // Simulate `--root` as the LAST argument (no value follows).
+  const r = spawnSync(process.execPath, [CLI, '--root'], { encoding: 'utf8', cwd: dir });
+  assert.notStrictEqual(r.status, 0, 'must exit non-zero rather than silently defaulting to cwd');
+  assert.match(r.stderr, /--root requires/);
+  const after = fs.readFileSync(path.join(dir, '.claude/agent-memory/forge-implementer/plain-lesson.md'), 'utf8');
+  assert.strictEqual(after, before, 'nothing in the accidental cwd target must be written');
+});
+
+t('BUG 6: --root <nonexistent> still errors (existing behavior preserved)', () => {
+  const dir = mkRepo();
+  const nonexistent = path.join(dir, 'does-not-exist');
+  const r = spawnSync(process.execPath, [CLI, '--root', nonexistent], { encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'a nonexistent --root target must still error');
+  assert.match(r.stderr, /does not exist/);
+});
+
+t('BUG 6: --root followed by a flag-shaped value (no value given) exits non-zero', () => {
+  const dir = buildFixture();
+  const r = spawnSync(process.execPath, [CLI, '--root', '--dry-run'], { encoding: 'utf8' });
+  assert.notStrictEqual(r.status, 0, 'a flag-shaped value must not be silently accepted as the root path');
+  assert.match(r.stderr, /--root requires/);
+});
+
+t('SUGGESTION: a run that redacted a secret prints a closing WARNING pointing at _pre-migration/', () => {
+  const dir = buildFixture();
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  assert.match(r.stdout, /WARNING/);
+  assert.match(r.stdout, /_pre-migration/);
+});
+
+t('a run with no secrets does not print the redaction WARNING', () => {
+  const dir = mkRepo();
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/clean.md',
+    '# A clean note\n\nNothing sensitive here.\n'
+  );
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  assert.ok(!/WARNING/.test(r.stdout), 'no WARNING should print when nothing was redacted');
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

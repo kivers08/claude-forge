@@ -56,7 +56,13 @@ Content is never lost:
    are all ordinary tracked files. A poisoned or wrongly-typed record is
    caught here, not silently trusted.
 4. Report what was migrated, what was skipped and why, and point at
-   `_pre-migration/` as where the untouched originals now live.
+   `_pre-migration/` as where the untouched originals now live. If the CLI
+   printed a closing `WARNING` about redacted secrets, surface it verbatim:
+   the live migrated record was scrubbed, but its pristine original in
+   `_pre-migration/` is intentionally **not** scrubbed and still holds the
+   raw secret at a newly-committed path — the human should review that
+   archive (and consider rotating the credential, or excluding that archived
+   file from version control) before committing.
 
 ## When `bootstrap` should offer this
 
