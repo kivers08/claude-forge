@@ -32,6 +32,12 @@ const { scrubSecrets } = require('../../plugins/forge/hooks/lib/redact');
 const AGENT_MEMORY_DIRNAME = '.claude/agent-memory';
 const PRE_MIGRATION_DIRNAME = '_pre-migration';
 
+// Mirrors plugins/forge/hooks/memory-redact.js's MAX_SCRUB_BYTES posture: a
+// record file bigger than this is skipped and reported rather than read in
+// full — bounds worst-case memory/time for one poisoned or truly enormous
+// file, same as the hook applies to its own scrub-on-write path.
+const MAX_RECORD_BYTES = 256 * 1024;
+
 // D28.3 type vocabulary: Anthropic's four subject-types plus forge's own
 // `decision` extension. A recognized `metadata.type` (or legacy top-level
 // `type`) on a pre-existing file carries straight through; anything else
@@ -98,14 +104,35 @@ function writeFileAtomic(file, content) {
 // fails (e.g. EXDEV, a cross-device archive root) — either way the content
 // lands in the archive before the source path is freed for the new record,
 // and the source is never left behind once the archive copy exists.
+//
+// NEVER clobbers an existing archive entry: a second, DIFFERENT original
+// destined for the same `<scope>/<name>` archive path (e.g. a human re-adds
+// a note at a previously-migrated path and re-runs migration) must not
+// silently overwrite the pristine first original. When the exact
+// destination is already taken, this finds the first free
+// `<name>.<n><ext>` sibling instead — the archive path chosen is returned
+// so the caller can report it — rather than throwing, so a re-run never
+// loses an original.
 function archiveOriginal(absSourceFile, archiveDestFile) {
   fs.mkdirSync(path.dirname(archiveDestFile), { recursive: true });
+  let dest = archiveDestFile;
+  if (fs.existsSync(dest)) {
+    const dir = path.dirname(archiveDestFile);
+    const ext = path.extname(archiveDestFile);
+    const stem = path.basename(archiveDestFile, ext);
+    let n = 1;
+    do {
+      dest = path.join(dir, `${stem}.${n}${ext}`);
+      n++;
+    } while (fs.existsSync(dest));
+  }
   try {
-    fs.renameSync(absSourceFile, archiveDestFile);
+    fs.renameSync(absSourceFile, dest);
   } catch (e) {
-    fs.copyFileSync(absSourceFile, archiveDestFile);
+    fs.copyFileSync(absSourceFile, dest);
     fs.unlinkSync(absSourceFile);
   }
+  return dest;
 }
 
 // ---- frontmatter parsing --------------------------------------------------
@@ -152,18 +179,33 @@ function parseScalar(raw) {
 // pre-frontmatter era) returns an empty frontmatter object and the whole
 // file as `body`.
 function parseRecord(raw) {
-  if (!raw.startsWith('---\n')) {
+  // Accept both LF (`---\n`) and CRLF (`---\r\n`) opening delimiters — a
+  // CRLF-line-ended record is routine in a Windows consumer checkout (the
+  // exact adoption scenario this engine targets) and must be recognized as
+  // frontmatter, not misclassified as a plain-markdown body (which would
+  // wrongly archive+rewrite an already-native CRLF record every run).
+  const startMatch = /^---\r?\n/.exec(raw);
+  if (!startMatch) {
     return { frontmatter: {}, body: raw };
   }
-  const end = raw.indexOf('\n---', 4);
-  if (end === -1) return { frontmatter: {}, body: raw };
-  const fmBlock = raw.slice(4, end);
-  let rest = raw.slice(end + 4);
+  const fmStart = startMatch[0].length;
+  // Closing delimiter is `\n---` (LF) or `\r\n---` (CRLF); search starting
+  // exactly at fmStart (the first byte of the frontmatter block itself) so
+  // the match offset maps directly onto `raw` with no off-by-one bookkeeping.
+  const closeMatch = /\r?\n---/.exec(raw.slice(fmStart));
+  if (!closeMatch) return { frontmatter: {}, body: raw };
+  const end = fmStart + closeMatch.index;
+  const fmBlock = raw.slice(fmStart, end);
+  let rest = raw.slice(end + closeMatch[0].length);
   if (rest.startsWith('\r\n')) rest = rest.slice(2);
   else if (rest.startsWith('\n')) rest = rest.slice(1);
 
   const frontmatter = {};
-  const lines = fmBlock.split('\n');
+  // Strip a trailing \r from each line so CRLF-authored frontmatter parses
+  // identically to LF: without this, `(.*)$` below would swallow the \r
+  // into the captured value and every scalar in a CRLF record would carry
+  // a stray trailing carriage return.
+  const lines = fmBlock.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
   let currentNestedKey = null;
   for (const line of lines) {
     if (line.trim() === '') continue;
@@ -209,8 +251,38 @@ function yamlScalar(v) {
   const s = String(v);
   // Quote anything that would otherwise be ambiguous or break the line-based
   // parser above (leading/trailing space, a colon+space inside the value, a
-  // line break, a leading quote/dash/hash).
-  if (/^\s|\s$|:\s|\n|^['"#-]/.test(s) || s === '') {
+  // line break, a leading quote/dash/hash) OR that would round-trip through
+  // parseScalar as a DIFFERENT type than the string it started as — e.g. a
+  // record whose name/slug is literally `0001`, `null`, or `true` (a source
+  // file named `0001.md`, or a legacy `name: 123`) must not be silently
+  // coerced to a number/null/boolean on read-back, which would make
+  // isNativeRecord's `typeof name === 'string'` check fail EVERY run and
+  // re-migrate the same file forever (never idempotent).
+  //
+  // This predicate must ALSO be safe for a REAL YAML parser, not just this
+  // module's own minimal parseScalar: migrated records are `---` frontmatter
+  // read by native Claude Code (or any standards-compliant YAML reader), not
+  // only by this engine. An unquoted value that a real parser would read as
+  // a different TYPE, or truncate, must be quoted here even though
+  // parseScalar above happens to read it back correctly as a plain string:
+  //   - a leading `[` or `{` reads as a flow sequence/mapping (e.g.
+  //     scrubRecordFields can fully redact a `name` down to literally
+  //     `[REDACTED:aws-access-key]`, which a real parser reads as a
+  //     one-element LIST, not a string — breaks native readability, D28.3).
+  //   - an unquoted ` #' mid-value starts a YAML comment, truncating
+  //     anything after it (e.g. `fixed issue #42` -> `fixed issue`).
+  //   - a leading `?`, `,`, `*`, `&`, `!`, `|`, `>`, `%`, `@`, or backtick is
+  //     each its own reserved YAML indicator character.
+  // All of these already round-trip correctly through parseScalar's existing
+  // quote-handling, so quoting them here is safe and keeps idempotency.
+  const looksNumeric = /^-?\d+(\.\d+)?$/.test(s);
+  const looksReservedWord = s === 'true' || s === 'false' || s === 'null' || s === '~';
+  if (
+    /^\s|\s$|:(\s|$)|[\n\r]|\s#|^[-?:,[\]{}#&*!|>'"%@`]/.test(s) ||
+    s === '' ||
+    looksNumeric ||
+    looksReservedWord
+  ) {
     // Order matters: escape backslashes first (so the backslashes this step
     // introduces for \n/\r below aren't themselves re-escaped), then quotes,
     // then the actual line-break characters — keeping the whole scalar on
@@ -403,6 +475,15 @@ function buildMemoryIndex(scopeDir, recordFiles) {
     if (m) indexedFiles.add(m[1]);
   }
   const newLines = [];
+  // Tracks, PER SOURCE RECORD FILE, whether indexing it redacted anything —
+  // needed by the caller to report an accurate WARNING location (SECURITY
+  // 3): a redaction here can come from a record this same run just migrated
+  // (archived under `_pre-migration/`) OR from an already-native record
+  // that was simply never indexed before (never archived — the Bluegrass
+  // rule leaves it live on disk untouched). Those two cases need DIFFERENT
+  // warning text, so the caller needs to know exactly which live file(s)
+  // contributed a redaction here, not just a total count.
+  const redactedFiles = [];
   for (const file of recordFiles.slice().sort()) {
     if (indexedFiles.has(file)) continue;
     const full = path.join(scopeDir, file);
@@ -415,13 +496,76 @@ function buildMemoryIndex(scopeDir, recordFiles) {
     } catch (e) {
       // keep the filename-derived fallback
     }
-    newLines.push(`- [${title}](${file}) — ${hook}`);
+    // §3.4: scrub the human-text fields (title/hook) INDIVIDUALLY, never the
+    // link target. `file` is the record's own on-disk basename (already
+    // filename-safe, derived from its id/slug) and must stay a valid link —
+    // scrubbing it here would rewrite a secret-shaped filename (e.g. a
+    // source record literally named `AKIA....md`) into a redaction
+    // placeholder, breaking the link while leaving the real file unlinked
+    // and invisible to native hub reads. See buildNativeRecord's
+    // scrubRecordFields, which scrubs fields separately for the same reason.
+    let totalRedactions = 0;
+    const scrubTitle = scrubSecrets(title);
+    const scrubHook = scrubSecrets(hook);
+    totalRedactions += scrubTitle.redactions.length + scrubHook.redactions.length;
+    if (totalRedactions > 0) redactedFiles.push(file);
+    newLines.push({ line: `- [${scrubTitle.text}](${file}) — ${scrubHook.text}`, redactions: totalRedactions });
   }
-  if (newLines.length === 0) return { changed: false };
-  const body = existingLines.filter((l) => l.trim() !== '');
-  const finalLines = body.concat(newLines);
-  writeFileAtomic(indexPath, finalLines.join('\n') + '\n');
-  return { changed: true };
+  if (newLines.length === 0) return { changed: false, redactions: 0, redactedFiles: [] };
+  // Only drop TRAILING blank lines (so new entries append cleanly after
+  // whatever was already there); every INTERNAL blank line in a
+  // human-authored hub is preserved as-is. The previous behavior stripped
+  // every blank line unconditionally, collapsing paragraph/heading
+  // separation in a live, human-edited MEMORY.md on every migration run.
+  let lastNonBlank = existingLines.length - 1;
+  while (lastNonBlank >= 0 && existingLines[lastNonBlank].trim() === '') lastNonBlank--;
+  const body = existingLines.slice(0, lastNonBlank + 1);
+  // §3.4: every write runs through the redaction scrubber first. A secret in
+  // a pre-existing hand-authored MEMORY.md line (never scrubbed elsewhere,
+  // since migrateScopeDir explicitly skips MEMORY.md as "not a record") must
+  // still not survive into the rewritten index. But scrubbing the WHOLE
+  // assembled markdown (as before) rewrites link TARGETS too: a pre-existing
+  // entry line whose file target happens to be secret-shaped gets its link
+  // corrupted the same way a freshly-built entry would. So each carried-
+  // through line is parsed for a leading `- [title](target)` link (the EXACT
+  // same anchor the `indexedFiles` dedup scan above uses — no requirement of
+  // a trailing ` — hook` or any particular separator, since a pre-existing
+  // hub line may have no hook at all, or use `-`/`–` instead of an em-dash);
+  // when it matches, the title AND any trailing text after the link (the
+  // hook, whatever its separator) are scrubbed individually and the
+  // `(target.md)` is left alone, exactly like the newly-built entries above.
+  // A line that doesn't match that shape is arbitrary human prose (not a
+  // link entry) with no target to protect, so it is scrubbed whole, same as
+  // before.
+  let redactionCount = 0;
+  // Tracks whether ANY carry-through (pre-existing hub line) content was
+  // redacted, for the same SECURITY-3 provenance reason as `redactedFiles`
+  // above: that content lives only in MEMORY.md itself (never archived to
+  // `_pre-migration/`, since migrateScopeDir never treats MEMORY.md as a
+  // migration source), so the caller must point a WARNING for this at the
+  // index file's own live path, not at the archive.
+  let carryThroughRedacted = false;
+  const scrubbedBody = body.map((line) => {
+    const m = /^(\s*-\s*\[)([^\]]*)(\]\()([^)]+\.md)(\))(.*)$/.exec(line);
+    if (m) {
+      const [, pre, title, mid, target, close, rest] = m;
+      const st = scrubSecrets(title);
+      const sr = scrubSecrets(rest);
+      const lineRedactions = st.redactions.length + sr.redactions.length;
+      redactionCount += lineRedactions;
+      if (lineRedactions > 0) carryThroughRedacted = true;
+      return `${pre}${st.text}${mid}${target}${close}${sr.text}`;
+    }
+    const { text, redactions } = scrubSecrets(line);
+    redactionCount += redactions.length;
+    if (redactions.length > 0) carryThroughRedacted = true;
+    return text;
+  });
+  for (const entry of newLines) redactionCount += entry.redactions;
+  const finalLines = scrubbedBody.concat(newLines.map((e) => e.line));
+  const assembled = finalLines.join('\n') + '\n';
+  writeFileAtomic(indexPath, assembled);
+  return { changed: true, redactions: redactionCount, redactedFiles, carryThroughRedacted };
 }
 
 // ---- orchestration ----------------------------------------------------------
@@ -442,6 +586,12 @@ function migrateScopeDir(root, dirName, opts) {
     return results;
   }
   const recordFilesForIndex = [];
+  // Filenames left untouched because they were ALREADY native (the Bluegrass
+  // rule: never archived, never rewritten). Needed after buildMemoryIndex
+  // runs so a redaction it reports against one of these files can be
+  // attributed correctly (SECURITY 3): the secret still sits in this LIVE
+  // record, never in `_pre-migration/`, since this file was never archived.
+  const nativeSkipFiles = new Set();
   for (const name of names) {
     if (name === 'MEMORY.md') continue; // an index, never a record
     if (name === PRE_MIGRATION_DIRNAME) continue; // the archive itself
@@ -455,11 +605,33 @@ function migrateScopeDir(root, dirName, opts) {
     }
     if (!st.isFile()) continue; // a symlink or directory here is left untouched, never followed
 
-    const raw = fs.readFileSync(full, 'utf8');
+    if (st.size > MAX_RECORD_BYTES) {
+      results.push({
+        file: path.join(dirName, name),
+        action: 'error',
+        reason: `file too large to migrate (${st.size} bytes > ${MAX_RECORD_BYTES} cap) — left untouched`,
+      });
+      continue;
+    }
+
+    // Reading a consumer repo's pre-existing file must never abort the
+    // whole run: an unreadable file (EACCES, a directory-vs-file race after
+    // the lstat above, deleted between readdir and here) is reported as a
+    // per-file error and skipped, same posture as the segment-validation
+    // and archive/write error paths below — not fatal to sibling scopes or
+    // even sibling files in the SAME scope.
+    let raw;
+    try {
+      raw = fs.readFileSync(full, 'utf8');
+    } catch (e) {
+      results.push({ file: path.join(dirName, name), action: 'error', reason: e.message });
+      continue;
+    }
     const { frontmatter, body } = parseRecord(raw);
 
     if (isNativeRecord(frontmatter)) {
       recordFilesForIndex.push(name);
+      nativeSkipFiles.add(name);
       results.push({ file: path.join(dirName, name), action: 'skip', reason: 'already native' });
       continue;
     }
@@ -479,6 +651,7 @@ function migrateScopeDir(root, dirName, opts) {
     });
     const serialized = serializeRecord(record);
 
+    let archivedAt; // relative path actually used for the archive copy; set only on the non-dry-run path
     if (!opts.dryRun) {
       // A path-containment violation (e.g. a planted symlink escaping the
       // archive root) or any other archive/write failure must be reported
@@ -488,7 +661,8 @@ function migrateScopeDir(root, dirName, opts) {
       try {
         const archiveRel = path.join(AGENT_MEMORY_DIRNAME, PRE_MIGRATION_DIRNAME, dirName, name);
         const archiveAbs = resolveInside(root, archiveRel);
-        archiveOriginal(full, archiveAbs);
+        const archiveDest = archiveOriginal(full, archiveAbs);
+        archivedAt = path.relative(root, archiveDest);
         writeFileAtomic(full, serialized);
       } catch (e) {
         results.push({ file: path.join(dirName, name), action: 'error', reason: e.message });
@@ -501,12 +675,33 @@ function migrateScopeDir(root, dirName, opts) {
       action: opts.dryRun ? 'would-migrate' : 'migrate',
       type: record.metadata.type,
       redactions: redactions.length,
+      archivedAt,
     });
   }
 
   if (!opts.dryRun && recordFilesForIndex.length) {
     const idx = buildMemoryIndex(dirPath, recordFilesForIndex);
-    if (idx.changed) results.push({ file: path.join(dirName, 'MEMORY.md'), action: 'index-updated' });
+    if (idx.changed) {
+      // SECURITY 3: classify WHERE each index-scrub redaction's raw secret
+      // still lives, so the CLI's closing WARNING can point at the right
+      // place instead of always assuming `_pre-migration/`. A redacted file
+      // that was migrated THIS run has its raw original archived there; a
+      // redacted file in `nativeSkipFiles` was never archived (Bluegrass
+      // rule — already native, left untouched) and its raw secret still
+      // sits in that LIVE record. Carry-through redactions (a pre-existing
+      // MEMORY.md hub line) have no source record at all — the raw secret
+      // lives only in the index file itself, also a live path.
+      const nativeRedactedPaths = (idx.redactedFiles || [])
+        .filter((f) => nativeSkipFiles.has(f))
+        .map((f) => path.join(dirName, f));
+      if (idx.carryThroughRedacted) nativeRedactedPaths.push(path.join(dirName, 'MEMORY.md'));
+      results.push({
+        file: path.join(dirName, 'MEMORY.md'),
+        action: 'index-updated',
+        redactions: idx.redactions,
+        nativeRedactedPaths,
+      });
+    }
   }
   return results;
 }
@@ -543,9 +738,13 @@ function migrateRepo(root, opts) {
 module.exports = {
   AGENT_MEMORY_DIRNAME,
   PRE_MIGRATION_DIRNAME,
+  MAX_RECORD_BYTES,
   TYPES,
   isValidSegment,
   resolveInside,
+  archiveOriginal,
+  parseScalar,
+  yamlScalar,
   parseRecord,
   serializeRecord,
   isNativeRecord,
