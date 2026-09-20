@@ -258,9 +258,31 @@ function yamlScalar(v) {
   // coerced to a number/null/boolean on read-back, which would make
   // isNativeRecord's `typeof name === 'string'` check fail EVERY run and
   // re-migrate the same file forever (never idempotent).
+  //
+  // This predicate must ALSO be safe for a REAL YAML parser, not just this
+  // module's own minimal parseScalar: migrated records are `---` frontmatter
+  // read by native Claude Code (or any standards-compliant YAML reader), not
+  // only by this engine. An unquoted value that a real parser would read as
+  // a different TYPE, or truncate, must be quoted here even though
+  // parseScalar above happens to read it back correctly as a plain string:
+  //   - a leading `[` or `{` reads as a flow sequence/mapping (e.g.
+  //     scrubRecordFields can fully redact a `name` down to literally
+  //     `[REDACTED:aws-access-key]`, which a real parser reads as a
+  //     one-element LIST, not a string — breaks native readability, D28.3).
+  //   - an unquoted ` #' mid-value starts a YAML comment, truncating
+  //     anything after it (e.g. `fixed issue #42` -> `fixed issue`).
+  //   - a leading `?`, `,`, `*`, `&`, `!`, `|`, `>`, `%`, `@`, or backtick is
+  //     each its own reserved YAML indicator character.
+  // All of these already round-trip correctly through parseScalar's existing
+  // quote-handling, so quoting them here is safe and keeps idempotency.
   const looksNumeric = /^-?\d+(\.\d+)?$/.test(s);
   const looksReservedWord = s === 'true' || s === 'false' || s === 'null' || s === '~';
-  if (/^\s|\s$|:\s|\n|^['"#-]/.test(s) || s === '' || looksNumeric || looksReservedWord) {
+  if (
+    /^\s|\s$|:\s|[\n\r]|\s#|^[-?:,[\]{}#&*!|>'"%@`]/.test(s) ||
+    s === '' ||
+    looksNumeric ||
+    looksReservedWord
+  ) {
     // Order matters: escape backslashes first (so the backslashes this step
     // introduces for \n/\r below aren't themselves re-escaped), then quotes,
     // then the actual line-break characters — keeping the whole scalar on
@@ -453,6 +475,15 @@ function buildMemoryIndex(scopeDir, recordFiles) {
     if (m) indexedFiles.add(m[1]);
   }
   const newLines = [];
+  // Tracks, PER SOURCE RECORD FILE, whether indexing it redacted anything —
+  // needed by the caller to report an accurate WARNING location (SECURITY
+  // 3): a redaction here can come from a record this same run just migrated
+  // (archived under `_pre-migration/`) OR from an already-native record
+  // that was simply never indexed before (never archived — the Bluegrass
+  // rule leaves it live on disk untouched). Those two cases need DIFFERENT
+  // warning text, so the caller needs to know exactly which live file(s)
+  // contributed a redaction here, not just a total count.
+  const redactedFiles = [];
   for (const file of recordFiles.slice().sort()) {
     if (indexedFiles.has(file)) continue;
     const full = path.join(scopeDir, file);
@@ -477,9 +508,10 @@ function buildMemoryIndex(scopeDir, recordFiles) {
     const scrubTitle = scrubSecrets(title);
     const scrubHook = scrubSecrets(hook);
     totalRedactions += scrubTitle.redactions.length + scrubHook.redactions.length;
+    if (totalRedactions > 0) redactedFiles.push(file);
     newLines.push({ line: `- [${scrubTitle.text}](${file}) — ${scrubHook.text}`, redactions: totalRedactions });
   }
-  if (newLines.length === 0) return { changed: false, redactions: 0 };
+  if (newLines.length === 0) return { changed: false, redactions: 0, redactedFiles: [] };
   // Only drop TRAILING blank lines (so new entries append cleanly after
   // whatever was already there); every INTERNAL blank line in a
   // human-authored hub is preserved as-is. The previous behavior stripped
@@ -495,31 +527,45 @@ function buildMemoryIndex(scopeDir, recordFiles) {
   // assembled markdown (as before) rewrites link TARGETS too: a pre-existing
   // entry line whose file target happens to be secret-shaped gets its link
   // corrupted the same way a freshly-built entry would. So each carried-
-  // through line is parsed for the `- [title](target) — hook` entry shape
-  // (same anchor as the `indexedFiles` scan above); when it matches, title
-  // and hook are scrubbed individually and the target is left alone, exactly
-  // like the newly-built entries above. A line that doesn't match that shape
-  // is arbitrary human prose (not a link entry) with no target to protect,
-  // so it is scrubbed whole, same as before.
+  // through line is parsed for a leading `- [title](target)` link (the EXACT
+  // same anchor the `indexedFiles` dedup scan above uses — no requirement of
+  // a trailing ` — hook` or any particular separator, since a pre-existing
+  // hub line may have no hook at all, or use `-`/`–` instead of an em-dash);
+  // when it matches, the title AND any trailing text after the link (the
+  // hook, whatever its separator) are scrubbed individually and the
+  // `(target.md)` is left alone, exactly like the newly-built entries above.
+  // A line that doesn't match that shape is arbitrary human prose (not a
+  // link entry) with no target to protect, so it is scrubbed whole, same as
+  // before.
   let redactionCount = 0;
+  // Tracks whether ANY carry-through (pre-existing hub line) content was
+  // redacted, for the same SECURITY-3 provenance reason as `redactedFiles`
+  // above: that content lives only in MEMORY.md itself (never archived to
+  // `_pre-migration/`, since migrateScopeDir never treats MEMORY.md as a
+  // migration source), so the caller must point a WARNING for this at the
+  // index file's own live path, not at the archive.
+  let carryThroughRedacted = false;
   const scrubbedBody = body.map((line) => {
-    const m = /^(\s*-\s*\[)([^\]]*)(\]\()([^)]+\.md)(\)\s*—\s*)(.*)$/.exec(line);
+    const m = /^(\s*-\s*\[)([^\]]*)(\]\()([^)]+\.md)(\))(.*)$/.exec(line);
     if (m) {
-      const [, pre, title, mid, target, sep, hook] = m;
+      const [, pre, title, mid, target, close, rest] = m;
       const st = scrubSecrets(title);
-      const sh = scrubSecrets(hook);
-      redactionCount += st.redactions.length + sh.redactions.length;
-      return `${pre}${st.text}${mid}${target}${sep}${sh.text}`;
+      const sr = scrubSecrets(rest);
+      const lineRedactions = st.redactions.length + sr.redactions.length;
+      redactionCount += lineRedactions;
+      if (lineRedactions > 0) carryThroughRedacted = true;
+      return `${pre}${st.text}${mid}${target}${close}${sr.text}`;
     }
     const { text, redactions } = scrubSecrets(line);
     redactionCount += redactions.length;
+    if (redactions.length > 0) carryThroughRedacted = true;
     return text;
   });
   for (const entry of newLines) redactionCount += entry.redactions;
   const finalLines = scrubbedBody.concat(newLines.map((e) => e.line));
   const assembled = finalLines.join('\n') + '\n';
   writeFileAtomic(indexPath, assembled);
-  return { changed: true, redactions: redactionCount };
+  return { changed: true, redactions: redactionCount, redactedFiles, carryThroughRedacted };
 }
 
 // ---- orchestration ----------------------------------------------------------
@@ -540,6 +586,12 @@ function migrateScopeDir(root, dirName, opts) {
     return results;
   }
   const recordFilesForIndex = [];
+  // Filenames left untouched because they were ALREADY native (the Bluegrass
+  // rule: never archived, never rewritten). Needed after buildMemoryIndex
+  // runs so a redaction it reports against one of these files can be
+  // attributed correctly (SECURITY 3): the secret still sits in this LIVE
+  // record, never in `_pre-migration/`, since this file was never archived.
+  const nativeSkipFiles = new Set();
   for (const name of names) {
     if (name === 'MEMORY.md') continue; // an index, never a record
     if (name === PRE_MIGRATION_DIRNAME) continue; // the archive itself
@@ -579,6 +631,7 @@ function migrateScopeDir(root, dirName, opts) {
 
     if (isNativeRecord(frontmatter)) {
       recordFilesForIndex.push(name);
+      nativeSkipFiles.add(name);
       results.push({ file: path.join(dirName, name), action: 'skip', reason: 'already native' });
       continue;
     }
@@ -629,7 +682,25 @@ function migrateScopeDir(root, dirName, opts) {
   if (!opts.dryRun && recordFilesForIndex.length) {
     const idx = buildMemoryIndex(dirPath, recordFilesForIndex);
     if (idx.changed) {
-      results.push({ file: path.join(dirName, 'MEMORY.md'), action: 'index-updated', redactions: idx.redactions });
+      // SECURITY 3: classify WHERE each index-scrub redaction's raw secret
+      // still lives, so the CLI's closing WARNING can point at the right
+      // place instead of always assuming `_pre-migration/`. A redacted file
+      // that was migrated THIS run has its raw original archived there; a
+      // redacted file in `nativeSkipFiles` was never archived (Bluegrass
+      // rule — already native, left untouched) and its raw secret still
+      // sits in that LIVE record. Carry-through redactions (a pre-existing
+      // MEMORY.md hub line) have no source record at all — the raw secret
+      // lives only in the index file itself, also a live path.
+      const nativeRedactedPaths = (idx.redactedFiles || [])
+        .filter((f) => nativeSkipFiles.has(f))
+        .map((f) => path.join(dirName, f));
+      if (idx.carryThroughRedacted) nativeRedactedPaths.push(path.join(dirName, 'MEMORY.md'));
+      results.push({
+        file: path.join(dirName, 'MEMORY.md'),
+        action: 'index-updated',
+        redactions: idx.redactions,
+        nativeRedactedPaths,
+      });
     }
   }
   return results;

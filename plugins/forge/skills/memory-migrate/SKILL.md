@@ -47,22 +47,30 @@ Content is never lost:
    `node scripts/migrate-agent-memory.js`). Add `--dry-run` first if the
    human wants to preview what would change before committing to it.
 2. Review the output: for each file, `migrate` (with a redaction count if
-   any secret was scrubbed), `skip` (already native), or `error` (an unsafe
-   plugin/scope directory name — surfaced, never guessed past). Every
-   `index-updated` line means that scope's `MEMORY.md` gained an entry for a
-   record that wasn't indexed yet.
+   any secret was scrubbed), `skip` (already native), or `error` — an unsafe
+   plugin/scope directory name, a file too large to migrate (over the
+   engine's size cap, left untouched), or a file that could not be read
+   (permissions, or removed mid-run) — every `error` is surfaced, never
+   guessed past. Every `index-updated` line means that scope's `MEMORY.md`
+   gained an entry for a record that wasn't indexed yet.
 3. Diff the result like any other change to committed files — the migrated
    records, the new `_pre-migration/` archive, and any updated `MEMORY.md`
    are all ordinary tracked files. A poisoned or wrongly-typed record is
    caught here, not silently trusted.
 4. Report what was migrated, what was skipped and why, and point at
    `_pre-migration/` as where the untouched originals now live. If the CLI
-   printed a closing `WARNING` about redacted secrets, surface it verbatim:
-   the live migrated record was scrubbed, but its pristine original in
-   `_pre-migration/` is intentionally **not** scrubbed and still holds the
-   raw secret at a newly-committed path — the human should review that
-   archive (and consider rotating the credential, or excluding that archived
-   file from version control) before committing.
+   printed a closing `WARNING` about redacted secrets, surface it verbatim —
+   there are two distinct cases and the CLI names the right location for
+   each: a redaction from a record this run migrated points at its pristine
+   original under `_pre-migration/` (intentionally **not** scrubbed, so it
+   still holds the raw secret at a newly-committed path); a redaction that
+   came only from indexing an already-native record's title/description (or
+   a pre-existing MEMORY.md hub line) was NEVER archived — the Bluegrass rule
+   leaves that record untouched — so the WARNING instead names the LIVE
+   record (or MEMORY.md) path where the raw secret still sits. Either way,
+   the human should review the named location(s) (and consider rotating the
+   credential, or excluding an archived file from version control) before
+   committing.
 
 ## When `bootstrap` should offer this
 

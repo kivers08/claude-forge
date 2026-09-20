@@ -323,6 +323,67 @@ t('yamlScalar/parseScalar round-trip a value containing an embedded newline byte
   assert.strictEqual(parsed.frontmatter.metadata.id, record.metadata.id);
 });
 
+t('BUG 1: yamlScalar quotes values a REAL YAML parser would misread as a different type or truncate', () => {
+  const engine = require('../lib/memory-migrate');
+  // Each of these is unquoted-safe against THIS module's own parseScalar
+  // (the line-based reader never confuses them), but would be misread by a
+  // real/standards-compliant YAML parser — which is exactly the reader that
+  // matters for a `---` frontmatter record checked into a repo (native
+  // Claude Code, any other YAML tool). Every one must come back quoted.
+  const cases = [
+    '[REDACTED:aws-access-key]', // real YAML: a one-element flow SEQUENCE, not a string
+    'fixed issue #42', // real YAML: unquoted ` #` starts a comment -> truncates to "fixed issue"
+    '{a}', // real YAML: a flow MAPPING
+    '*ref', // real YAML: an alias indicator
+    '&anchor', // real YAML: an anchor indicator
+    '!tag value', // real YAML: a tag indicator
+    '|literal', // real YAML: a block-literal indicator
+    '>folded', // real YAML: a block-folded indicator
+    '%directive', // real YAML: a directive indicator
+    '@at', // real YAML: reserved indicator
+    '`backtick', // real YAML: not a plain-scalar-safe leading char in this project's convention
+    '?question', // real YAML: explicit-key indicator
+    ',leading', // real YAML: leading comma is a flow-collection indicator
+  ];
+  for (const s of cases) {
+    const serialized = engine.yamlScalar(s);
+    assert.ok(
+      serialized.startsWith('"') && serialized.endsWith('"'),
+      `yamlScalar(${JSON.stringify(s)}) must be quoted for a real YAML reader, got: ${serialized}`
+    );
+    const parsed = engine.parseScalar(serialized);
+    assert.strictEqual(parsed, s, `yamlScalar(${JSON.stringify(s)}) -> ${serialized} must round-trip via parseScalar to the identical string`);
+  }
+});
+
+t('BUG 1: end-to-end — a fully-redacted name stays idempotent and re-reads as a string', () => {
+  const engine = require('../lib/memory-migrate');
+  const redactedName = '[REDACTED:aws-access-key]'; // exactly what scrubRecordFields produces for a fully-redacted name
+  const record = {
+    name: redactedName,
+    description: `secret was here: ${redactedName}`,
+    metadata: { type: 'project', scope: 'implementer', id: '44444444-4444-4444-4444-444444444444' },
+    body: 'Body.\n',
+  };
+  const serialized = engine.serializeRecord(record);
+  const nameLine = serialized.split('\n').find((l) => l.startsWith('name:'));
+  assert.strictEqual(nameLine, `name: "${redactedName}"`, 'a bracket-leading name must be quoted in the serialized frontmatter');
+
+  const parsed = engine.parseRecord(serialized);
+  assert.strictEqual(typeof parsed.frontmatter.name, 'string', 'name must re-read as a string, not a YAML list');
+  assert.strictEqual(parsed.frontmatter.name, redactedName);
+
+  // Idempotency: re-serializing the parsed-back record produces byte-identical
+  // frontmatter (the fix must not just fix ONE pass, it must be stable).
+  const reserialized = engine.serializeRecord({
+    name: parsed.frontmatter.name,
+    description: parsed.frontmatter.description,
+    metadata: parsed.frontmatter.metadata,
+    body: parsed.body,
+  });
+  assert.strictEqual(reserialized, serialized, 're-serializing the parsed record must be byte-identical (idempotent)');
+});
+
 t('a literal two-character backslash-n round-trips correctly (never misread as an escaped newline)', () => {
   const engine = require('../lib/memory-migrate');
   const literal = 'path is C:\\notes\\readme and a real\nnewline too';
@@ -528,6 +589,20 @@ t('SECURITY: a secret in an already-native record\'s description does not surviv
     'utf8'
   );
   assert.ok(nativeRaw.includes(SECRET), 'the native record itself must remain byte-identical (not rewritten)');
+
+  // SECURITY 3: this redaction's raw secret was NEVER archived (the native
+  // record was left untouched by design) — the closing WARNING must name
+  // the LIVE record path, not the (nonexistent, for this file) archive.
+  assert.match(r.stdout, /WARNING/);
+  assert.match(
+    r.stdout,
+    /forge-implementer[/\\]native-with-secret\.md/,
+    `WARNING must name the live record path, got: ${r.stdout}`
+  );
+  assert.ok(
+    !/_pre-migration/.test(r.stdout),
+    `no record was archived in this run — WARNING must not point at _pre-migration/, got: ${r.stdout}`
+  );
 });
 
 t('BUG 4: a pre-existing hub with internal blank lines keeps them after a migration run', () => {
@@ -721,6 +796,78 @@ t('BUG 7: a pre-existing hub line with a secret in its hook is scrubbed while it
   assert.ok(result.redactions >= 1, 'the pre-existing line secret must be counted as a redaction');
   const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
   assert.match(index, /\(existing\.md\)/, 'pre-existing entry link target must be preserved, not rewritten');
+  assert.ok(!index.includes(SECRET), 'the secret must not survive in the rewritten index');
+});
+
+t('BUG 2: a pre-existing hub line with a link but NO hook at all keeps its link target', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  // No ` — hook` suffix whatsoever — just `- [title](target.md)`. Before the
+  // fix, the carry-through scrub regex required a trailing `) — hook` and
+  // fell through to the whole-line scrubSecrets branch for a line like this,
+  // which (for a secret-shaped target) would corrupt the link target itself.
+  const secretFileName = `${SECRET}.md`;
+  write(dir, `.claude/agent-memory/forge-implementer/${secretFileName}`, 'placeholder');
+  write(dir, '.claude/agent-memory/forge-implementer/MEMORY.md', `- [a title](${secretFileName})\n`);
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/real.md',
+    [
+      '---',
+      'name: real-record',
+      'description: A real migrated record',
+      'metadata:',
+      '  type: project',
+      '  id: 77777777-7777-7777-7777-777777777777',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, ['real.md']);
+  assert.strictEqual(result.changed, true);
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  assert.match(
+    index,
+    new RegExp(`\\(${SECRET}\\.md\\)`),
+    `link target must be preserved unscrubbed even with no hook suffix, got: ${index}`
+  );
+});
+
+t('BUG 2: a pre-existing hub line using a non-em-dash separator scrubs the hook but keeps the link target', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/MEMORY.md',
+    `- [existing-note](existing.md) - leaked key ${SECRET} in this hook\n`
+  );
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/real.md',
+    [
+      '---',
+      'name: real-record',
+      'description: A real migrated record',
+      'metadata:',
+      '  type: project',
+      '  id: 99999999-9999-9999-9999-999999999999',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, ['real.md']);
+  assert.strictEqual(result.changed, true);
+  assert.ok(result.redactions >= 1, 'the pre-existing line secret must still be counted as a redaction');
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  assert.match(index, /\(existing\.md\)/, 'pre-existing entry link target must be preserved with a non-em-dash separator too');
   assert.ok(!index.includes(SECRET), 'the secret must not survive in the rewritten index');
 });
 
