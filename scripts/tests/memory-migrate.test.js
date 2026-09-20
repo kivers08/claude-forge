@@ -323,14 +323,18 @@ t('yamlScalar/parseScalar round-trip a value containing an embedded newline byte
   assert.strictEqual(parsed.frontmatter.metadata.id, record.metadata.id);
 });
 
-t('BUG 1: yamlScalar quotes values a REAL YAML parser would misread as a different type or truncate', () => {
+t('BUG 1: yamlScalar ALWAYS double-quotes a string scalar, so it round-trips through ANY real YAML reader and this module\'s own parseScalar', () => {
   const engine = require('../lib/memory-migrate');
-  // Each of these is unquoted-safe against THIS module's own parseScalar
-  // (the line-based reader never confuses them), but would be misread by a
-  // real/standards-compliant YAML parser — which is exactly the reader that
-  // matters for a `---` frontmatter record checked into a repo (native
-  // Claude Code, any other YAML tool). Every one must come back quoted.
+  // This predicate used to conditionally quote based on a growing list of
+  // "looks ambiguous to a real YAML reader" shapes, and reviewers kept
+  // finding another edge case a standards-compliant YAML 1.1/1.2 parser
+  // would misread that the list didn't yet cover. The fix ends that
+  // whack-a-mole by ALWAYS quoting every string scalar, so every one of
+  // these — old cases AND the newly-found ones — must come back quoted and
+  // round-trip byte-identically.
   const cases = [
+    'plain word', // ordinary case: must still be quoted (no more conditional skip)
+    'implementer', // ordinary single word, still always quoted
     '[REDACTED:aws-access-key]', // real YAML: a one-element flow SEQUENCE, not a string
     'fixed issue #42', // real YAML: unquoted ` #` starts a comment -> truncates to "fixed issue"
     '{a}', // real YAML: a flow MAPPING
@@ -346,12 +350,28 @@ t('BUG 1: yamlScalar quotes values a REAL YAML parser would misread as a differe
     '`backtick', // real YAML: not a plain-scalar-safe leading char in this project's convention
     '?question', // real YAML: explicit-key indicator
     ',leading', // real YAML: leading comma is a flow-collection indicator
+    // YAML-1.1 boolean words (a real 1.1 parser reads each of these as a
+    // BOOLEAN, not a string, unquoted) — the exact recurring whack-a-mole
+    // class this fix ends.
+    'yes', 'no', 'on', 'off', 'y', 'n', 'Yes', 'NO', 'On', 'OFF', 'Y', 'N',
+    // Case-insensitive core-schema words: `True`/`False`/`NULL`/`Null` etc.
+    // are booleans/null to a real parser even though this module's own
+    // parseScalar only special-cases the exact lowercase spellings.
+    'True', 'False', 'NULL', 'Null',
+    // Numeric-looking-but-not-decimal scalars a real YAML 1.1 parser reads
+    // as a number: hex, octal, binary, and the `.inf`/`.nan` float words.
+    '0x1F', '0o17', '0b101', '.inf', '-.inf', '.nan',
+    // Embedded newline and a literal backslash, both already exercised
+    // elsewhere in this file end-to-end via serializeRecord/parseRecord, but
+    // asserted directly against yamlScalar/parseScalar here too.
+    'line one\nline two',
+    'path is C:\\notes\\readme',
   ];
   for (const s of cases) {
     const serialized = engine.yamlScalar(s);
     assert.ok(
       serialized.startsWith('"') && serialized.endsWith('"'),
-      `yamlScalar(${JSON.stringify(s)}) must be quoted for a real YAML reader, got: ${serialized}`
+      `yamlScalar(${JSON.stringify(s)}) must always be double-quoted, got: ${serialized}`
     );
     const parsed = engine.parseScalar(serialized);
     assert.strictEqual(parsed, s, `yamlScalar(${JSON.stringify(s)}) -> ${serialized} must round-trip via parseScalar to the identical string`);
@@ -607,6 +627,57 @@ t('SECURITY: a secret in an already-native record\'s description does not surviv
   );
 });
 
+t('FIX B: an already-native record with TWO secrets in its description attributes an EXACT count of 2 native redactions, 0 migrated', () => {
+  const dir = mkRepo();
+  const SECOND_SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'; // GitHub-token-shaped, distinct pattern from AWS
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/native-with-two-secrets.md',
+    [
+      '---',
+      'name: native-with-two-secrets',
+      `description: Has TWO secrets here ${SECRET} and also ${SECOND_SECRET} in the description`,
+      'metadata:',
+      '  type: project',
+      '  id: 12121212-1212-1212-1212-121212121212',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
+  const index = fs.readFileSync(indexPath, 'utf8');
+  assert.ok(!index.includes(SECRET) && !index.includes(SECOND_SECRET), 'neither secret must survive into the index');
+
+  // Before the fix, `migratedRedactions` was computed by subtracting a FILE
+  // COUNT (1, since only one file contributed) from the total redaction
+  // count (2), leaving 1 wrongly attributed to `_pre-migration/` even
+  // though NOTHING was archived this run (the record was already native).
+  // The fix must attribute the EXACT count: 2 native, 0 migrated.
+  assert.match(r.stdout, /WARNING/, `expected a WARNING in stdout, got: ${r.stdout}`);
+  assert.ok(
+    !/secret\(s\)\/PII value\(s\) were redacted from LIVE migrated record/.test(r.stdout),
+    `no migrated-record WARNING should print (nothing was archived this run), got: ${r.stdout}`
+  );
+  assert.match(
+    r.stdout,
+    /WARNING: 2 secret\(s\)\/PII value\(s\) were redacted only from the MEMORY\.md/,
+    `native-path WARNING must report the exact count of 2, got: ${r.stdout}`
+  );
+  assert.match(
+    r.stdout,
+    /forge-implementer[/\\]native-with-two-secrets\.md \(2\)/,
+    `WARNING must attribute exactly 2 redactions to the live native path, got: ${r.stdout}`
+  );
+  assert.ok(
+    !/_pre-migration/.test(r.stdout),
+    `no record was archived in this run — WARNING must not mention _pre-migration/, got: ${r.stdout}`
+  );
+});
+
 t('BUG 4: a pre-existing hub with internal blank lines keeps them after a migration run', () => {
   const dir = buildFixture();
   const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
@@ -767,6 +838,86 @@ t('BUG 7: buildMemoryIndex keeps a resolvable link target for a secret-shaped fi
   assert.ok(!hook.includes(SECRET), 'hook text must be scrubbed');
 });
 
+// ---- regression test: FIX D — a bracketed/multiline title breaks the link -
+
+t('FIX D: a record title containing brackets and a newline produces a valid, resolvable index link', () => {
+  const engine = require('../lib/memory-migrate');
+  const dir = mkRepo();
+  const scopeDir = path.join(dir, '.claude/agent-memory/forge-implementer');
+  fs.mkdirSync(scopeDir, { recursive: true });
+  // A `name:` value that itself contains `[`/`]` and an embedded newline
+  // (both are legal YAML scalar content, always double-quoted per FIX A —
+  // see the yamlScalar test above — so a pre-existing OR migrated record
+  // CAN legitimately carry this). Before the fix, interpolating this
+  // straight into `- [title](target)` would break the markdown link itself:
+  // the `]` would close the link text early and the raw newline would
+  // split the single-line list item across two lines.
+  write(
+    dir,
+    '.claude/agent-memory/forge-implementer/bracketed.md',
+    [
+      '---',
+      'name: "[bracketed] title\\nwith a newline"',
+      'description: A record with a link-breaking title',
+      'metadata:',
+      '  type: project',
+      '  id: 13131313-1313-1313-1313-131313131313',
+      '---',
+      '',
+      'Body.',
+      '',
+    ].join('\n')
+  );
+  const result = engine.buildMemoryIndex(scopeDir, ['bracketed.md']);
+  assert.strictEqual(result.changed, true);
+  const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
+  const m = /^-\s*\[([^\]]*)\]\(([^)]+\.md)\)\s*—\s*(.*)$/m.exec(index);
+  assert.ok(m, `index must contain a single well-formed, resolvable entry line, got: ${JSON.stringify(index)}`);
+  const [, title, target] = m;
+  assert.strictEqual(target, 'bracketed.md', 'link target must still resolve to the real record file');
+  assert.ok(fs.existsSync(path.join(scopeDir, target)), 'the linked target file must actually exist');
+  assert.ok(!/[\r\n]/.test(title), 'title text in the link must not contain a raw newline');
+  assert.ok(!/[[\]]/.test(title), 'title text in the link must not contain an unescaped bracket');
+  // The whole index must be well-formed: exactly the entries expected, no
+  // stray extra "line" produced by an embedded newline splitting the entry.
+  const nonBlankLines = index.split('\n').filter((l) => l.trim() !== '');
+  assert.strictEqual(nonBlankLines.length, 1, `expected exactly one index entry line, got: ${JSON.stringify(index)}`);
+});
+
+// ---- regression test: FIX E — secret-shaped filename left unwarned -------
+
+t('FIX E: a migrated record with a secret-shaped filename triggers a WARNING naming that file', () => {
+  const dir = mkRepo();
+  const secretFileName = `${SECRET}.md`;
+  // Plain markdown (no frontmatter) so this goes through the MIGRATE path —
+  // slugFromFilename/buildNativeRecord preserve the original basename, so
+  // the migrated record keeps living at this secret-shaped path.
+  write(
+    dir,
+    `.claude/agent-memory/forge-implementer/${secretFileName}`,
+    '# A note whose FILENAME (not just its content) is secret-shaped\n\nOrdinary body text, no secret in the prose itself.\n'
+  );
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+
+  const migratedPath = path.join(dir, `.claude/agent-memory/forge-implementer/${secretFileName}`);
+  assert.ok(fs.existsSync(migratedPath), 'the record must still live at its original (secret-shaped) filename — target must not be scrubbed');
+
+  const indexPath = path.join(dir, '.claude/agent-memory/forge-implementer/MEMORY.md');
+  const index = fs.readFileSync(indexPath, 'utf8');
+  assert.match(index, new RegExp(`\\(${secretFileName}\\)`), 'index link target must still point at the real (secret-shaped) filename');
+
+  // The closing CLI WARNING must name this file specifically, prompting a
+  // rename + credential rotation — not leave the credential-shaped filename
+  // sitting in the committed MEMORY.md with no notice at all.
+  assert.match(r.stdout, /WARNING/, `expected a WARNING in stdout, got: ${r.stdout}`);
+  assert.match(
+    r.stdout,
+    new RegExp(`forge-implementer[/\\\\]${secretFileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    `WARNING must name the secret-shaped filename, got: ${r.stdout}`
+  );
+});
+
 t('BUG 7: a pre-existing hub line with a secret in its hook is scrubbed while its link target is preserved', () => {
   const engine = require('../lib/memory-migrate');
   const dir = mkRepo();
@@ -871,6 +1022,75 @@ t('BUG 2: a pre-existing hub line using a non-em-dash separator scrubs the hook 
   const index = fs.readFileSync(path.join(scopeDir, 'MEMORY.md'), 'utf8');
   assert.match(index, /\(existing\.md\)/, 'pre-existing entry link target must be preserved with a non-em-dash separator too');
   assert.ok(!index.includes(SECRET), 'the secret must not survive in the rewritten index');
+});
+
+// ---- regression tests: parseRecord keyless-frontmatter content loss -------
+
+t('BUG 8: a plain-markdown body containing its own "---" line is not misparsed as frontmatter, content preserved', () => {
+  const engine = require('../lib/memory-migrate');
+  // No LEADING `---` at all, so the very first line is plain prose — the
+  // file never even reaches the frontmatter-block code path. This is here
+  // as a baseline sanity check alongside the trickier keyless-block case
+  // below.
+  const raw = '# A note\n\nSome text before a break.\n\n---\n\nMore text after the break.\n';
+  const parsed = engine.parseRecord(raw);
+  assert.deepStrictEqual(parsed.frontmatter, {});
+  assert.strictEqual(parsed.body, raw, 'entire file must be preserved verbatim as the body');
+});
+
+t('BUG 8: a leading `---`...`---` block with ZERO recognized keys is treated as plain markdown, content preserved intact', () => {
+  const engine = require('../lib/memory-migrate');
+  // Starts with `---` (thematic break) and a body that itself contains
+  // ANOTHER `---` line further down. Before the fix, the space between the
+  // two `---` lines would be misread as a (vacuous) frontmatter block —
+  // recognizing zero keys inside it — and everything between them would be
+  // silently dropped from the migrated body. After the fix, zero recognized
+  // keys means "not really frontmatter", so the WHOLE raw file must survive
+  // as the body.
+  const raw = [
+    '---',
+    '',
+    'This paragraph sits between two thematic-break-shaped lines and is not',
+    'YAML frontmatter at all — just prose a human wrote.',
+    '',
+    '---',
+    '',
+    'And this trailing paragraph must also survive.',
+    '',
+  ].join('\n');
+  const parsed = engine.parseRecord(raw);
+  assert.deepStrictEqual(parsed.frontmatter, {});
+  assert.strictEqual(parsed.body, raw, 'entire file must be preserved verbatim, nothing dropped between the two --- lines');
+
+  // End-to-end: migrating this file must carry the FULL original text
+  // through into the new native record's body, not a truncated remainder.
+  const dir = mkRepo();
+  write(dir, '.claude/agent-memory/forge-implementer/keyless.md', raw);
+  const r = run(dir);
+  assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+  const migratedRaw = fs.readFileSync(path.join(dir, '.claude/agent-memory/forge-implementer/keyless.md'), 'utf8');
+  assert.match(migratedRaw, /This paragraph sits between two thematic-break-shaped lines/);
+  assert.match(migratedRaw, /And this trailing paragraph must also survive\./);
+});
+
+t('BUG 8: closing terminator must be its own line — a "---" merely prefixing a longer body line is not treated as the close', () => {
+  const engine = require('../lib/memory-migrate');
+  const raw = [
+    '---',
+    'name: has-real-frontmatter',
+    'description: A real record',
+    '---trailing-text-on-the-same-line-as-the-delimiter',
+    '',
+    'Body text.',
+    '',
+  ].join('\n');
+  const parsed = engine.parseRecord(raw);
+  // The `---trailing-text...` line must NOT be accepted as the closing
+  // delimiter (it is not `---` alone on its line) — with no valid closing
+  // delimiter found at all, the whole file must fall back to plain-body
+  // preservation rather than parsing a truncated/wrong frontmatter block.
+  assert.deepStrictEqual(parsed.frontmatter, {});
+  assert.strictEqual(parsed.body, raw, 'entire file must be preserved verbatim when no valid closing delimiter exists');
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);

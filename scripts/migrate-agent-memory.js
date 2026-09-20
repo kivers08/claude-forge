@@ -77,8 +77,8 @@ function main(argv) {
   let errored = 0;
   let indexed = 0;
   let totalRedactions = 0;
-  let migratedRedactions = 0; // redactions whose raw original is archived under _pre-migration/
-  const nativeRedactedPaths = []; // LIVE paths whose raw secret was never archived (SECURITY 3)
+  let migratedRedactions = 0; // EXACT count of redactions whose raw original is archived under _pre-migration/
+  const nativeRedactedPaths = []; // [{ path, count }] — LIVE paths whose raw secret was never archived (SECURITY 3)
   for (const r of results) {
     if (r.action === 'error') {
       errored++;
@@ -89,13 +89,14 @@ function main(argv) {
     } else if (r.action === 'index-updated') {
       indexed++;
       totalRedactions += r.redactions || 0;
-      const nativePathCount = (r.nativeRedactedPaths || []).length;
-      // Only the portion of this index's redactions NOT attributed to a
-      // specific live (never-archived) path is assumed archived — an
-      // index-updated result's redactions come from indexing newly-migrated
-      // records (archived) as well as already-native records/carry-through
-      // hub lines (never archived), mixed together in one count.
-      migratedRedactions += Math.max(0, (r.redactions || 0) - nativePathCount);
+      // `r.migratedRedactions` and `r.nativeRedactedPaths[].count` are exact,
+      // pre-attributed counts from migrateScopeDir (per-file, never a file
+      // count subtracted from a redaction count) — an index-updated result's
+      // redactions come from indexing newly-migrated records (archived) as
+      // well as already-native records/carry-through hub lines (never
+      // archived), and this module trusts the engine's exact attribution
+      // rather than re-deriving it approximately here.
+      migratedRedactions += r.migratedRedactions || 0;
       nativeRedactedPaths.push(...(r.nativeRedactedPaths || []));
       const red = r.redactions ? ` (redacted ${r.redactions})` : '';
       console.log(`index ${r.file} updated${red}`);
@@ -119,11 +120,12 @@ function main(argv) {
     //     (or in re-indexing one), whose pristine original is archived —
     //     never scrubbed — under `.claude/agent-memory/_pre-migration/`.
     //   - `nativeRedactedPaths`: the secret was in an already-native
-    //     record's title/hook, picked up only while building the MEMORY.md
-    //     index entry for it (or in a pre-existing hub line itself). The
-    //     Bluegrass rule means an already-native record is NEVER archived,
-    //     so that raw secret was never moved anywhere — it still sits in
-    //     the LIVE record (or the live MEMORY.md) at its original path.
+    //     record's title/hook/FILENAME, picked up only while building the
+    //     MEMORY.md index entry for it (or in a pre-existing hub line
+    //     itself). The Bluegrass rule means an already-native record is
+    //     NEVER archived, so that raw secret was never moved anywhere — it
+    //     still sits in the LIVE record (or the live MEMORY.md) at its
+    //     original path.
     // Pointing every warning at `_pre-migration/` regardless of which case
     // applies would send a human looking in the archive for a secret that
     // was never archived at all, leaving it live and unreviewed.
@@ -137,12 +139,15 @@ function main(argv) {
       );
     }
     if (nativeRedactedPaths.length > 0) {
-      const list = nativeRedactedPaths.map((p) => `  - ${p}`).join('\n');
+      const totalNativeRedactions = nativeRedactedPaths.reduce((sum, p) => sum + (p.count || 0), 0);
+      const list = nativeRedactedPaths.map((p) => `  - ${p.path} (${p.count})`).join('\n');
       console.log(
-        `\nWARNING: ${nativeRedactedPaths.length} secret(s)/PII value(s) were redacted only from the MEMORY.md ` +
+        `\nWARNING: ${totalNativeRedactions} secret(s)/PII value(s) were redacted only from the MEMORY.md ` +
           `index entry text, but the LIVE record(s) below were left untouched by design (already native, or a ` +
           `pre-existing hub line) and still contain the raw value(s) at their original path(s):\n${list}\n` +
-          `Review and rotate the exposed credential(s) there before committing.`
+          `Review and rotate the exposed credential(s) there before committing. If a path above is itself the ` +
+          `file's NAME (not just its contents), rename the file and rotate the credential — the filename is ` +
+          `visible in the committed MEMORY.md link target even though its text was left unscrubbed by design.`
       );
     }
   }
