@@ -334,6 +334,8 @@ t('BUG 1: yamlScalar quotes values a REAL YAML parser would misread as a differe
     '[REDACTED:aws-access-key]', // real YAML: a one-element flow SEQUENCE, not a string
     'fixed issue #42', // real YAML: unquoted ` #` starts a comment -> truncates to "fixed issue"
     '{a}', // real YAML: a flow MAPPING
+    'TODO:', // real YAML: a trailing colon (`:` at end) is a mapping indicator
+    'Lessons learned:', // real YAML: trailing `:` -> misread as a mapping key
     '*ref', // real YAML: an alias indicator
     '&anchor', // real YAML: an anchor indicator
     '!tag value', // real YAML: a tag indicator

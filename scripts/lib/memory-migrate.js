@@ -278,7 +278,7 @@ function yamlScalar(v) {
   const looksNumeric = /^-?\d+(\.\d+)?$/.test(s);
   const looksReservedWord = s === 'true' || s === 'false' || s === 'null' || s === '~';
   if (
-    /^\s|\s$|:\s|[\n\r]|\s#|^[-?:,[\]{}#&*!|>'"%@`]/.test(s) ||
+    /^\s|\s$|:(\s|$)|[\n\r]|\s#|^[-?:,[\]{}#&*!|>'"%@`]/.test(s) ||
     s === '' ||
     looksNumeric ||
     looksReservedWord
