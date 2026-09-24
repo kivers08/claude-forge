@@ -339,7 +339,10 @@ metadata:
   created:    <ISO8601 — stamped by the writing process, not inside a hook>
   lastUsed:   <ISO8601 | null>
   uses:       <int ≥ 0>
-  source:     authored | learning-block | ambient    # provenance — see §4
+  source:     authored | learning-block | ambient | migrated  # provenance — see §4; `migrated` = adapted
+                                                      #   from a pre-existing (non-native) shape by the
+                                                      #   D28.2 adoption-migration engine, not authored
+                                                      #   fresh — see D28.2/D28.4
   supersedes: <id | null>                            # keyed upsert; old kept, archived
 --- (body) ---
 <the record; for feedback/project, structure as rule/fact + **Why:** + **How to apply:**
@@ -370,6 +373,12 @@ until a concrete need — adding a type is cheap, removing one is not.
 - **Ambient (opt-in):** a SubagentStop synthesizer that writes a `source: ambient`
   record when a unit clears an outcome bar — **never for the reviewer**, and
   never from the review CI path.
+- **Migrated (one-time, human-initiated):** `forge memory migrate` (D28.2)
+  adapting a consumer repo's pre-existing memory/lessons into native records
+  writes `source: migrated` — distinct provenance from `authored` (a human/
+  agent wrote it fresh) and `ambient` (synthesized on a unit outcome), since a
+  migrated record's content originates from whatever pre-existing shape the
+  adopting repo already had.
 - Every write runs the redaction scrubber (§4) first.
 
 ---
