@@ -83,6 +83,8 @@ jobs:
       # the tier resolver and hook surfaces the slower suites build on.
       - name: Tier resolver unit tests (D17)
         run: node plugins/forge/hooks/tests/tier.test.js
+      - name: segment-split tokenizer unit tests (D27)
+        run: node plugins/forge/hooks/tests/segment-split.test.js
       - name: memory-redact hook unit tests (D28.4)
         run: node plugins/forge/hooks/tests/memory-redact.test.js
       - name: redact lib unit tests (D28.4)

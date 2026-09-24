@@ -95,9 +95,22 @@ function split(command) {
   return out;
 }
 
-// Split one segment into shell-ish words, with quotes removed. `quoted` records
-// whether the word carried any quoting, which the guards use to tell a real
-// `gh pr create` from `echo "gh pr create"`.
+// A bare word: characters that carry no shell meaning unquoted, so quoting
+// them was cosmetic. `"pr"`, `'merge'`, `me""rge` all reduce to a bare word
+// identical to the unquoted form. Anything with whitespace or a shell
+// metacharacter (`& | ; < > ( ) $ ' " * ? [ ] { } ~ # !` etc.) is NOT bare —
+// there the quoting was load-bearing (`"gh pr merge"` is one argument, not a
+// command). Identifier-ish punctuation (`. / : @ % + , = ^ -`) stays bare so a
+// quoted PR number/URL/flag still reads as itself.
+const BARE_WORD = /^[\w./:@%+,=^-]+$/;
+
+// Split one segment into shell-ish words, with quotes removed. `quoted` marks a
+// token whose meaning DEPENDS on quoting — a spaced/metachar blob like
+// `echo "gh pr create"` (one argument), NOT a real command word that merely
+// carried cosmetic quotes. Guards use this to tell `gh pr create` from
+// `echo "gh pr create"`; getting it wrong reopens D27, where `gh "pr" merge`
+// (identical to `gh pr merge` in bash) slipped past the merge gate because a
+// single cosmetically-quoted word was treated as data.
 function tokenize(segment) {
   const src = String(segment == null ? '' : segment);
   const out = [];
@@ -108,7 +121,9 @@ function tokenize(segment) {
   let i = 0;
 
   const flush = () => {
-    if (has) out.push({ value: buf, quoted });
+    // A cosmetically-quoted bare word (`"pr"`) is the unquoted word; only a
+    // token whose value carries whitespace or a metachar stays `quoted` (D27).
+    if (has) out.push({ value: buf, quoted: quoted && !BARE_WORD.test(buf) });
     buf = '';
     has = false;
     quoted = false;
