@@ -128,6 +128,42 @@ mistake: <slug|none>
 confirmed, or something you missed that surfaced afterward) — leave `none`
 on a normal clean review.
 
+Then, at the very end of your report (after/alongside the LEARNING block),
+append the shared hand-back contract blocks. A parallel unit parses these, so
+match the shapes **verbatim**.
+
+Always emit the OUTCOME block when applicable:
+
+```
+### OUTCOME
+outcome: success | fail | partial
+unit_label: <short-kebab-slug-of-the-unit>
+tests_passed: true | false | n/a
+findings_confirmed: <integer> | n/a
+notes: <short metadata only — NEVER prompt/response/customer text>
+```
+
+For this agent, `findings_confirmed` is the core signal: set it to the integer
+count of findings you confirmed — it must match the findings you mapped in your
+one-line summary (N bugs + N security + N convention + N suggestions), `0` on a
+clean review. `tests_passed` is `n/a` — this agent runs no tests.
+`OUTCOME.notes` is **metadata only**: never paste prompt, response, or customer
+text into it.
+
+Emit the MEMORY PROPOSAL block only when you have a lesson worth persisting:
+
+```
+### MEMORY PROPOSAL
+propose: yes
+scope: agent-spoke | rule | hub
+lesson: <one-line rule>
+trigger: <when it applies>
+```
+
+When there is no lesson, emit a single `### MEMORY PROPOSAL` block with
+`propose: no` and nothing else. You never write memory yourself — you only
+propose; the main context is the sole writer (propose→curate→commit).
+
 ## Memory
 
 This agent uses native `memory: project` at `.claude/agent-memory/forge-reviewer/`,

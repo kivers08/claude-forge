@@ -75,6 +75,41 @@ Before the LEARNING block, report: branch, commit SHA(s), `git log --oneline
 <base>..HEAD`, what changed, what verified it, and anything left undone or
 uncertain.
 
+Then, at the very end of your report (after/alongside the LEARNING block),
+append the shared hand-back contract blocks. A parallel unit parses these, so
+match the shapes **verbatim**.
+
+Always emit the OUTCOME block when applicable:
+
+```
+### OUTCOME
+outcome: success | fail | partial
+unit_label: <short-kebab-slug-of-the-unit>
+tests_passed: true | false | n/a
+findings_confirmed: <integer> | n/a
+notes: <short metadata only — NEVER prompt/response/customer text>
+```
+
+For this agent, `tests_passed` reflects the scoped tests you ran for the change
+(`true`/`false`; `n/a` only if the unit genuinely had no test to run).
+`findings_confirmed` is `n/a` — this agent does not map findings.
+`OUTCOME.notes` is **metadata only**: never paste prompt, response, or customer
+text into it.
+
+Emit the MEMORY PROPOSAL block only when you have a lesson worth persisting:
+
+```
+### MEMORY PROPOSAL
+propose: yes
+scope: agent-spoke | rule | hub
+lesson: <one-line rule>
+trigger: <when it applies>
+```
+
+When there is no lesson, emit a single `### MEMORY PROPOSAL` block with
+`propose: no` and nothing else. You never write memory yourself — you only
+propose; the main context is the sole writer (propose→curate→commit).
+
 ## Memory
 
 This agent uses native `memory: project` at `.claude/agent-memory/forge-implementer/`,
