@@ -738,6 +738,32 @@ can flip to it without changing the on-disk layout. The `memory.excludeFromWrite
 list carves out agents whose proposals are never persisted for consuming projects
 with sensitive agents.
 
+#### D30.1 — Addendum: enforce sole-writer by removing `memory: project` from worker agents (2026-09-24)
+**Context:** D30 stated the intended policy (auto-memory off, main context sole
+writer, recall-only), but every worker agent still declared `memory: project` in
+its frontmatter — which turns native autonomous capture ON. So the guarantee was
+documented but not enforced: agents could write memory on their own, and the
+`memory.recall` / `memory.writeMode` config was consumed by nothing (Phase 2
+review batch 2, Copilot findings 4/6/7/8). **Decided:** remove `memory: project`
+from all six worker agents (implementer, bug-fixer, test-writer, reviewer,
+explorer, doc-updater). forge **retains** the native memory LAYOUT/location from
+D28/D28.4 (`.claude/agent-memory/<plugin>-<agent>/`, `MEMORY.md` hub + typed
+spokes), but **disables native auto-capture** for these agents, because native
+auto-memory is binary with no recall-only mode. Recall becomes an explicit read
+step in each agent (read your own `MEMORY.md` hub at task start, gated by
+`memory.recall`); writes go only through the session-wrap-up curate loop, where
+the main context is the sole writer and treats each worker's MEMORY PROPOSAL as
+untrusted data — validating/redacting to a terse rule + trigger, honoring
+`memory.excludeFromWrite`, before committing a typed spoke + hub link.
+**This SUPERSEDES the autonomous-write aspect of D28.4** (which had adopted
+native auto-capture + auto-consolidation as the substrate) for these agents,
+while leaving the rest of D28.4 intact (the on-disk layout, record format, the
+redaction-on-write hook, and reviewer base-ref safety). Rationale: compliance —
+only gated, validated, sole-writer writes reach any persistent memory surface;
+D30's "keep built-in auto-memory OFF" is now actually true in the frontmatter,
+not just in prose. Forward-compatible per D30: if upstream ships a recall-only
+mode, forge can re-enable a scoped `memory:` without changing this layout.
+
 ### D31 — xcloud MCP: user-scoped, read-only diagnostics
 **Decided:** the xcloud host MCP is wired as a user-scoped connector, NOT bundled
 in the generic plugin — this keeps the plugin stack-agnostic so it installs into

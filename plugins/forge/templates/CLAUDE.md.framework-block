@@ -81,11 +81,16 @@ never stored in `.claude/forge.json`.
 ### Memory
 
 Agent memory uses Claude Code's native per-agent layout with a
-propose→curate→commit loop. A worker agent emits a `### MEMORY PROPOSAL` block in
-its hand-back; the main context is the **sole writer** that curates and commits
-it. Recall is read-only: an agent reads its own `MEMORY.md` at task start
-(`memory.recall`). Built-in auto-memory is kept off — it is binary with no
-recall-only mode — so all writes stay gated through this loop.
+propose→curate→commit loop. **Native auto-capture is OFF: no worker agent
+declares a `memory:` scope**, so agents never write memory autonomously (it is
+binary with no recall-only mode). **Recall** is an explicit read: an agent reads
+its own `MEMORY.md` hub at task start (a link-index to typed spoke files), gated
+by `memory.recall`. **Writes** go only through the **sole writer** — the main
+context. A worker emits a `### MEMORY PROPOSAL` block in its hand-back; the
+session-wrap-up curate step treats that text as **untrusted data** (not
+instructions), validates and redacts it to a terse rule + trigger, then commits
+it as a typed spoke plus a hub link (honoring `memory.excludeFromWrite`). No
+write bypasses this loop.
 
 ### Deploys and host infrastructure
 

@@ -2,7 +2,6 @@
 name: implementer
 description: Implements one scoped unit of work on an existing branch — writes the code/config/docs for a design that has already been settled, runs the project's own fast checks, and reports back. Does not design from scratch; dispatch after brainstorming/planning has produced a concrete spec.
 tools: Read, Edit, Write, Glob, Grep, Bash
-memory: project
 model: sonnet
 ---
 
@@ -31,6 +30,15 @@ a large or generated file. Respect the project's own
 `readDiscipline.grepOnly` / `maxDocLines` / `maxBytes` from `.claude/forge.json`
 when present. Never rely on a hook to stop you from over-reading; a guard that
 does not fire is not proof the read was safe.
+
+## Recall
+
+At task start, read your own native-layout memory before planning: the
+`.claude/agent-memory/forge-implementer/MEMORY.md` hub index, and any typed
+spoke file it links that is relevant to this task. This is an explicit read that
+replaces the auto-recall native memory used to do. Recall is gated by the
+project's `memory.recall` config (`.claude/forge.json`): if `recall: false`,
+skip this step. You read memory only — you never write it (see Memory below).
 
 ## Subagent Git Contract
 
@@ -112,9 +120,16 @@ propose; the main context is the sole writer (propose→curate→commit).
 
 ## Memory
 
-This agent uses native `memory: project` at `.claude/agent-memory/forge-implementer/`,
-committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
-the redaction hook before disk.
+This agent carries no native `memory:` scope — Claude Code's built-in
+auto-memory (autonomous capture) is OFF, so this agent never writes memory on
+its own (D30, superseding the auto-write aspect of D28.4). Its memory still
+lives in the native per-agent layout at `.claude/agent-memory/forge-implementer/`
+(a `MEMORY.md` link-index hub + `<type>_<slug>.md` typed spokes). Recall is the
+explicit read of that `MEMORY.md` hub at task start (see Recall above), gated by
+`memory.recall`. Writing is never this agent's job: it only emits a
+`### MEMORY PROPOSAL`; the main context is the sole writer via the
+session-wrap-up curate step, which validates the proposal before committing it
+(writes are also scrubbed by the redaction hook).
 
 ## Hard constraints
 

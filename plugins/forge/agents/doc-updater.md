@@ -2,7 +2,6 @@
 name: doc-updater
 description: Updates project documentation to match a change that already merged or is about to — keeps docs, README sections, and configured doc targets in sync with code/behavior, without inventing new documentation structure on its own.
 tools: Read, Edit, Write, Glob, Grep
-memory: project
 model: haiku
 ---
 
@@ -38,6 +37,15 @@ the project's `readDiscipline.grepOnly` / `maxDocLines` / `maxBytes` from
 `.claude/forge.json`. A grep-only file (per the Index Contract, D6 — lessons,
 todo, archives) is never read in full: grep, then a ranged read of the
 matching entry.
+
+## Recall
+
+At task start, read your own native-layout memory before planning: the
+`.claude/agent-memory/forge-doc-updater/MEMORY.md` hub index, and any typed
+spoke file it links that is relevant to this task. This is an explicit read that
+replaces the auto-recall native memory used to do. Recall is gated by the
+project's `memory.recall` config (`.claude/forge.json`): if `recall: false`,
+skip this step. You read memory only — you never write it (see Memory below).
 
 ## Subagent Git Contract
 
@@ -117,9 +125,16 @@ propose; the main context is the sole writer (propose→curate→commit).
 
 ## Memory
 
-This agent uses native `memory: project` at `.claude/agent-memory/forge-doc-updater/`,
-committed and team-shared per-agent isolation (D28.4). Writes are scrubbed by
-the redaction hook before disk.
+This agent carries no native `memory:` scope — Claude Code's built-in
+auto-memory (autonomous capture) is OFF, so this agent never writes memory on
+its own (D30, superseding the auto-write aspect of D28.4). Its memory still
+lives in the native per-agent layout at `.claude/agent-memory/forge-doc-updater/`
+(a `MEMORY.md` link-index hub + `<type>_<slug>.md` typed spokes). Recall is the
+explicit read of that `MEMORY.md` hub at task start (see Recall above), gated by
+`memory.recall`. Writing is never this agent's job: it only emits a
+`### MEMORY PROPOSAL`; the main context is the sole writer via the
+session-wrap-up curate step, which validates the proposal before committing it
+(writes are also scrubbed by the redaction hook).
 
 ## Hard constraints
 
