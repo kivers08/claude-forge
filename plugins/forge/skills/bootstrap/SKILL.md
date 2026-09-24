@@ -22,11 +22,28 @@ an existing configured project.
    without asking: `git.draftPrRequired: true`, `git.squashOnly: true`,
    `taskFiles.caps` at the values documented in `plan-excerpt.md`
    (400/1000/100/100 for lessons/todo/sprint/spoke) unless the project states
-   otherwise.
+   otherwise. Two blocks are always scaffolded with safe, inert defaults
+   (never guess a live value for either):
+   - `telemetry`: `{ "enabled": false, "mode": "metadata-only" }`. Leave
+     `sinkUrl`, `projectKey`, and `tokenEnv` unset — the project fills them in
+     only when it opts in (D29). The ingest **token is never stored in
+     `forge.json`**: it lives as an environment secret named by `tokenEnv`, and
+     `projectKey` must match the identity the sink's token was minted for.
+   - `memory`: `{ "recall": true, "writeMode": "propose-curate",
+     "excludeFromWrite": [] }`. Built-in auto-memory stays OFF; every write is
+     gated through the propose→curate→commit loop (D30). `excludeFromWrite`
+     lists agents whose proposals are never persisted (compliance carve-out) —
+     empty by default.
 2. **`forge.md`** — a sibling file, one paragraph per top-level `forge.json`
    key, explaining what it controls and why the chosen value was picked.
    Written for a human skimming it later, not as schema-description
-   boilerplate.
+   boilerplate. Include a paragraph for `telemetry` (off and metadata-only by
+   default; when opting in, only structured metadata is emitted — never
+   prompt/response or customer content; the ingest token is an env secret named
+   by `tokenEnv`, never committed, and `projectKey` must match what the sink's
+   token was minted for) and one for `memory` (recall on, writes gated through
+   propose→curate→commit with built-in auto-memory kept off, and
+   `excludeFromWrite` naming any agents whose proposals are never persisted).
 3. **CLAUDE.md framework block** — a marker-delimited block (clear start/end
    markers so `audit-framework` can diff it later) containing the
    coordinator-facing rules: the tier table (D17), the T0 auto-merge

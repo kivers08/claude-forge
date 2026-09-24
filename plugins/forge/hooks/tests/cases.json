@@ -314,5 +314,14 @@
 
   { "name": "fail open: subagent-telemetry on a malformed payload",
     "script": "hooks/subagent-telemetry.js", "payload": "payloads/malformed.json",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "telemetry-flush: disabled config no-ops (no POST, no output)",
+    "script": "hooks/telemetry-flush.js", "payload": "payloads/telemetry-flush-fixture.json",
+    "fixture": "fixtures/configured",
+    "expect": { "exit": 0, "stdoutEmpty": true } },
+
+  { "name": "fail open: telemetry-flush on a malformed payload",
+    "script": "hooks/telemetry-flush.js", "payload": "payloads/malformed.json",
     "expect": { "exit": 0, "stdoutEmpty": true } }
 ]

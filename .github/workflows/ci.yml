@@ -89,6 +89,10 @@ jobs:
         run: node plugins/forge/hooks/tests/memory-redact.test.js
       - name: redact lib unit tests (D28.4)
         run: node plugins/forge/hooks/tests/redact.test.js
+      - name: telemetry flush emitter unit tests (D29)
+        run: node plugins/forge/hooks/tests/telemetry-flush.test.js
+      - name: subagent telemetry parseOutcome unit tests (D29/D30)
+        run: node plugins/forge/hooks/tests/subagent-telemetry.test.js
       - name: Project SessionStart hook unit tests
         run: .claude/hooks/tests/session-start.test.sh
       - name: reviewer-clean-check unit tests

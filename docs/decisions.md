@@ -637,3 +637,165 @@ Covered by `hooks/tests/segment-split.test.js` (the tokenizer, incl. the
 merge (`gh api -X PUT …/pulls/N/merge`) bypasses `merge-gate` entirely because
 its `match` is `gh pr merge|git merge`; the API form is a different command
 shape the guard never sees. Tracked in `docs/plans/forge-adoption.md` §10.
+### D28 — Memory v2: native typed memory, hybrid recall, earned-lesson measurement
+Transcribed from `docs/plans/memory-v2.md` (the `brainstorm` proposal the owner
+accepted, edited, and re-scoped), which is referenced across the codebase as
+implemented (D28.4) but was never written into this log. The proposal itself was
+a design; what is BUILT vs PROPOSED is marked per sub-decision below.
+
+**Decided:** evolve the D4/D6/D15 memory system in place, natively in Node,
+rather than adopting PMB or any MCP memory server. Keep committed, git-visible,
+per-agent-scoped markdown as the canonical store; add an optional, rebuildable
+local index for hybrid recall; measure lesson usefulness before it influences
+ranking. Options considered: adopt PMB wholesale (rejected — no per-agent scope,
+auto-recall as invisible policy, a write-capable MCP in the review path, binary
+user-level storage failing D13, and a Python + 450 MB embedder prerequisite
+failing D11/D1); hybrid PMB-for-coordinator (viable experiment, not default);
+native (chosen). Every forge memory decision (D4 per-agent, D6 git-visible index,
+D11 Node-only, D13 cloud-first, D20 instruction-surface gating) is a constraint
+PMB violates, so the ideas are re-implemented as Node components under forge's
+own contracts.
+
+**Superseded:** none removed. D4/D6/D15 are extended; the migration preserves the
+existing `.claude/agent-memory/**` files.
+
+#### D28.1 — Storage & recall engine (SETTLED 2026-09-16, brainstorm)
+**Decided:** embedded, git-synced, lexical-first. Canonical store is committed
+markdown under `.claude/agent-memory/**` (source of truth, syncs across the
+owner's two servers via `git pull`, diff-visible/gated). Local index is
+`node:sqlite` (built-in FTS5 gives BM25 directly), rebuildable and never
+authoritative (`forge memory reindex`). Recall is a lexical BM25 core now; a
+dense/semantic reranker (RRF-fused) is deferred as a zero-migration bolt-on.
+Consequence — a D11 amendment: `node:sqlite` FTS5 would raise the Node floor from
+≥20 to ≥22.5, but per the D28.4 re-scope this applies only IF the optional
+visible/ranked-recall path ships; the thin-layer core needs no index, so the
+floor stays ≥20 until then (both target boxes run 22.23, so the raise is free
+when taken). Scope confirmed: forge's per-agent AI-coding memory (lessons agents
+learn while working), not a client/business-data store. Rejected: networked
+vector/relational DBs (break install-anywhere/D13, no measurable benefit at
+forge's scale); stdlib JSON index (viable, zero-dep, but more hand-rolled BM25
+code than FTS5 — retained as fallback).
+
+#### D28.2 — Adoption migration: adapt a consumer repo's existing memory (SETTLED 2026-09-16)
+**Decided:** when forge is installed into a repo that ALREADY has agent
+memory/lessons (any prior shape), forge adapts those files into the memory-v2
+record format non-destructively — content preserved, files never deleted,
+existing records updated/merged in place, never overwritten or dropped. Trigger:
+adaptation runs at adoption, explicitly — via the `bootstrap` skill and a `forge
+memory migrate` command the human runs once — NOT silently on first SessionStart
+(a silent auto-rewrite would violate forge's "no invisible standing policy").
+Non-destructive guarantee (the "Bluegrass rule"): never removes a pre-existing
+record or its content, and idempotent (re-run is a no-op), fixture-guarded. After
+converting a file, the pristine pre-migration original is MOVED into an
+out-of-the-way archive (`.claude/agent-memory/_pre-migration/<scope>/…`) — not
+deleted, not left beside the new record — so the live path holds only clean
+memory-v2 records. Applies to both Unit 1's self-migration and Unit 8's adoption
+migration.
+
+#### D28.3 — Record schema: Anthropic-superset, single vocabulary (SETTLED 2026-09-16)
+**Decided:** a memory-v2 record IS a valid Anthropic native-memory record,
+extended. `name` and `description` stay at the top level (Anthropic fields;
+`description` is the native memory tool's relevance key). All of forge's
+operational/ranking fields move under the `metadata:` block Anthropic already
+provides: `type`, `scope`, `id`, `tier`, `importance`, `created`, `lastUsed`,
+`uses`, `source`, `supersedes`. Type vocabulary: Anthropic's `user | feedback |
+project | reference` plus forge's `decision` extension (a coding agent needs a
+decisions log the four subject-types don't cover); an unknown `type` degrades
+gracefully. Chosen over a parallel schema so there is one format, native
+compatibility, and adoption migration only adds `metadata.*` fields rather than
+translating a foreign vocabulary. Consequence: Unit 1's flat-scalar parser gains
+support for exactly one level of `metadata:` nesting (injection-safe serializer
+still governs every value) — decided before Unit 1 merges.
+
+#### D28.4 — Re-scope: thin safety/visibility layer over NATIVE subagent memory (SETTLED 2026-09-17)
+The biggest course change in the epic; it supersedes the "build a storage
+subsystem" framing. **Why:** Claude Code shipped native subagent memory (`memory:
+<scope>`, v2.1.33) and Auto Dream consolidation (v2.1.59). Verified on v2.1.197
+(from the shipped binary's strings and files already on disk) that native writes
+to `.claude/agent-memory/<plugin>-<agent>/` (exactly D28's path), uses a
+`MEMORY.md` link-index hub + `<type>_<slug>.md` topic spokes, uses the D28.3
+record format (`name`/`description` top-level, `type` under `metadata:`), and
+auto-captures + auto-consolidates. The existing
+`.claude/agent-memory/forge-reviewer|implementer|bug-fixer/` records are
+native-captured, not hand-authored. **Decided:** adopt native as the substrate;
+stop building a parallel storage engine; build ONLY the layer native lacks.
+BUILD: (1) redaction-on-write hook scrubbing secrets/PII under
+`.claude/agent-memory/**`; (2) reviewer safety — reviewer memory read from the
+base ref and the reviewer excluded from untrusted auto-inject (highest-value
+piece); (3) adoption migration (D28.2); (4) optional visible/ranked recall (BM25
++ attributable injection — deferred; the only thing that would revive the
+`node:sqlite`/Node-floor amendment). DROP (native/Auto Dream covers it): the
+hand-rolled storage/parser/serializer (Unit 1 `lib/memory.js` — superseded, PR #7
+NOT merged), our own pruning/consolidation/auditor, and Unit 6 earned-usefulness
+measurement. Still holds: D28.3 (the record format IS native's), D28.2 (adoption
+migration + archive-originals), and the §4 security posture (memory is a
+reviewable, gated instruction surface), now enforced via the reviewer-safety hook
+rather than a custom read path.
+
+**Built vs proposed:** The design and re-scope (D28.1–D28.4) are SETTLED
+decisions; the runtime pieces they call for (redaction hook, reviewer-safety
+extension, agent-memory config, adoption migration, optional recall) remain
+PROPOSED/in-flight units, not yet delivered here. The superseded storage-engine
+branches (`claude/mv2-u1-record-schema`, PR #7) are retired; salvageable pieces
+(the redaction scrubber and its tests) migrate into the redaction hook unit.
+
+### D29 — Telemetry sink (local buffer + batch flush)
+**Decided:** hooks continue to append records to
+`${CLAUDE_PLUGIN_DATA}/telemetry.jsonl` (unchanged). A Stop/SessionStop flush
+hook batches those records and POSTs them to the configured `telemetry.sinkUrl`
+with the token read from the env var named by `telemetry.tokenEnv`; the flush is
+best-effort, non-blocking, and metadata-only (`telemetry.mode: metadata-only`).
+**Rationale:** a per-event POST from short-lived hook processes is unreliable
+(the process exits before the request completes, and network flakiness drops
+events), so buffer-then-batch decouples emission from delivery. forge hardcodes
+no URL; the consuming project supplies `sinkUrl`, `projectKey`, and `tokenEnv`
+via the `telemetry` config block.
+
+### D30 — Memory: propose→curate→commit (native layout, gated writes)
+**Decided:** adopt Claude Code's native memory LAYOUT/location
+(`.claude/agent-memory/<agent>/`) but keep the built-in auto-memory OFF, because
+it is binary — on or off — with no recall-only mode (an upstream gap). Agents
+emit a `### MEMORY PROPOSAL` block in their hand-back; the main context is the
+sole writer that curates and commits it; recall is via each agent reading its own
+`MEMORY.md` at task start. This keeps writes reviewable and gated
+(`memory.writeMode: propose-curate`) while still getting native-format recall
+(`memory.recall`). Forward-compatible: if upstream ships a recall-only mode, forge
+can flip to it without changing the on-disk layout. The `memory.excludeFromWrite`
+list carves out agents whose proposals are never persisted for consuming projects
+with sensitive agents.
+
+#### D30.1 — Addendum: enforce sole-writer by removing `memory: project` from worker agents (2026-09-24)
+**Context:** D30 stated the intended policy (auto-memory off, main context sole
+writer, recall-only), but every worker agent still declared `memory: project` in
+its frontmatter — which turns native autonomous capture ON. So the guarantee was
+documented but not enforced: agents could write memory on their own, and the
+`memory.recall` / `memory.writeMode` config was consumed by nothing (Phase 2
+review batch 2, Copilot findings 4/6/7/8). **Decided:** remove `memory: project`
+from all six worker agents (implementer, bug-fixer, test-writer, reviewer,
+explorer, doc-updater). forge **retains** the native memory LAYOUT/location from
+D28/D28.4 (`.claude/agent-memory/<plugin>-<agent>/`, `MEMORY.md` hub + typed
+spokes), but **disables native auto-capture** for these agents, because native
+auto-memory is binary with no recall-only mode. Recall becomes an explicit read
+step in each agent (read your own `MEMORY.md` hub at task start, gated by
+`memory.recall`); writes go only through the session-wrap-up curate loop, where
+the main context is the sole writer and treats each worker's MEMORY PROPOSAL as
+untrusted data — validating/redacting to a terse rule + trigger, honoring
+`memory.excludeFromWrite`, before committing a typed spoke + hub link.
+**This SUPERSEDES the autonomous-write aspect of D28.4** (which had adopted
+native auto-capture + auto-consolidation as the substrate) for these agents,
+while leaving the rest of D28.4 intact (the on-disk layout, record format, the
+redaction-on-write hook, and reviewer base-ref safety). Rationale: compliance —
+only gated, validated, sole-writer writes reach any persistent memory surface;
+D30's "keep built-in auto-memory OFF" is now actually true in the frontmatter,
+not just in prose. Forward-compatible per D30: if upstream ships a recall-only
+mode, forge can re-enable a scoped `memory:` without changing this layout.
+
+### D31 — xcloud MCP: user-scoped, read-only diagnostics
+**Decided:** the xcloud host MCP is wired as a user-scoped connector, NOT bundled
+in the generic plugin — this keeps the plugin stack-agnostic so it installs into
+any consuming project regardless of hosting. It is used for read-only diagnostics
+only (logs, deploy errors, monitoring); the credential lives as an env secret,
+never in committed config. The owner-only-deploy guardrail — Claude never
+triggers deploys or any xCloud write operation (sites, servers, cron, SSL,
+supervisor, SSH-based deploy) — is carried in the framework block, not here;
+reading xCloud state for diagnostics is the only sanctioned use.
