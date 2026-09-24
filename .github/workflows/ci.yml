@@ -95,6 +95,8 @@ jobs:
         run: node scripts/tests/changelog.test.js
       - name: t0-auto-merge unit tests (revoke attribution, state tri-state)
         run: node scripts/tests/t0-auto-merge.test.js
+      - name: memory adoption-migration unit tests (D28.2/D28.4 unit 4)
+        run: node scripts/tests/memory-migrate.test.js
       # Slowest deterministic steps last, so a cheap failure never pays for
       # them. `run.js` alone is ~3s — roughly half the suite's total work.
       - name: Hook unit runs (forge)

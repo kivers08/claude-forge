@@ -13,3 +13,14 @@
 # should add the matching entries here itself.
 /changelog.d/.closeout-staging/
 /CHANGELOG.md.tmp
+
+# D28.2/D28.5 finding #5: the memory adoption-migration engine
+# (plugins/forge/scripts/lib/memory-migrate.js) archives every pristine,
+# UNSCRUBBED pre-migration original under this directory before writing the
+# reshaped native record in its place (the "Bluegrass rule" — never deleted,
+# never overwritten). Deliberately gitignored: migrating a secret-bearing
+# original must never re-commit the raw secret into the tree just because it
+# got moved to a new path. The archive stays on local disk for manual review/
+# credential-rotation, and the true original remains recoverable from the
+# consumer repo's own git history regardless.
+.claude/agent-memory/_pre-migration/
