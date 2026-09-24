@@ -1,7 +1,7 @@
 # claude-forge
 
 Private Claude Code plugin (`forge`) and its marketplace, for the owner's own
-projects on any stack. Version 0.0.1. See `CHANGELOG.md`.
+projects on any stack. Version 0.2.0. See `CHANGELOG.md`.
 
 ## What is here
 

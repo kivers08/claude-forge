@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 — 2026-09-24
+
+### Added
+
+- Telemetry config block: `enabled`, `sinkUrl`, `projectKey`, `tokenEnv`, and `mode` keys under `telemetry` in `.claude/forge.json`.
+- Memory config block: `recall`, `writeMode`, and `excludeFromWrite` keys under `memory` in `.claude/forge.json`.
+- D29 Stop flush-hook emitter: buffers events to `telemetry.jsonl` and batches them to a configured metadata-only sink, best-effort, truncating the buffer on a successful send.
+- OUTCOME telemetry capture: `parseOutcome` turns worker hand-backs into recorded session outcomes.
+- MEMORY PROPOSAL and OUTCOME hand-back blocks on all six worker agents.
+- `session-wrap-up` curate step: propose → curate → commit, honoring `memory.excludeFromWrite`.
+- Bootstrap scaffolding and framework-block docs for telemetry and memory, plus the read-only-diagnostics / owner-only-deploy guardrail.
+
+### Docs
+
+- Transcribed D28 into `decisions.md`.
+- Added D29 (telemetry sink), D30 (memory propose → curate → commit), and D31 (xcloud user-scoped read-only diagnostics).
+
 ## 0.1.0 — 2026-09-20
 
 First tagged release. Rolls up the tiered-process framework (D17–D23), the
