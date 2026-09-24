@@ -399,7 +399,7 @@ function scrubRecordFields(name, description, body, metadata) {
     return r.text;
   };
   // D28.5 finding #4: scrubbing a metadata value BARE (just the value string,
-  // with no surrounding text) loses the `KEY=`/`key:` context redact.js's
+  // with no surrounding text) loses the `key:` context redact.js's
   // `secret-assignment` pattern requires to recognize it as a credential
   // assignment at all — a legacy field like `metadata.legacy.auth_token:
   // "abc123XYZ456"` would scrub to nothing, because the bare value
@@ -407,21 +407,26 @@ function scrubRecordFields(name, description, body, metadata) {
   // needs its keyword+separator prefix; the other patterns need their own
   // fixed prefix, e.g. `ghp_`/`AKIA`/etc., which a metadata VALUE may not
   // carry even though the surrounding `key: value` shape is exactly what a
-  // human would call a leaked secret). Reconstructing `${k}=${v}` (a TIGHT
-  // assignment — no surrounding whitespace) restores that context
-  // unconditionally: `isTightAssignment` in secret-assignment's `replace`
-  // matches on the bare `=` shape ALONE regardless of the keyword's case or
-  // separator style, so this catches a generic secret in a metadata field
-  // even when the field's own key name (e.g. `note`, `author`) doesn't look
-  // identifier-shaped by itself. The reconstructed `${k}=` prefix is stripped
-  // back off the scrubbed result afterward so the metadata value itself
-  // (not `key=value`) is what's stored — only the REDACTION, if any, is kept
-  // from the wrapped pass. Redaction counts stay exact: `scrub` above already
-  // pushes into `redactions` for every actual replacement, and re-stripping
-  // the prefix is a pure string operation that doesn't invent or drop a
-  // count.
+  // human would call a leaked secret).
+  //
+  // Reconstruct a LOOSE `${k}: ${v}` (colon + whitespace), NOT a tight
+  // `${k}=${v}`. A tight `=` sets redact.js's `isTightAssignment` signal,
+  // which forces redaction ON ITS OWN and bypasses the `looksLikeProseValue`
+  // guard — so a benign field like `access_key: frontdoor` (identifier-shaped
+  // key, plain-word value) would be destroyed to `[REDACTED:...]`, silently
+  // losing the real value in the reshaped record. A loose separator keeps the
+  // key-context detection (an identifier-shaped key still trips
+  // `looksLikeIdentifier`, catching a genuine secret) while re-enabling the
+  // prose-value guard, so a plain lowercase word is left intact. The tradeoff
+  // — a secret under a NON-identifier key (`note`, `author`) with no digit/
+  // punctuation isn't caught — matches the bare-scrub behavior anyway (that
+  // case never matched a pattern before either), so this is strictly safer,
+  // not a new gap. The reconstructed `${k}: ` prefix is stripped back off so
+  // only the value (or its redaction) is stored; `scrub` already counts every
+  // real replacement, and stripping a prefix is a pure string op that neither
+  // invents nor drops a count.
   const scrubMetadataValue = (k, v) => {
-    const prefix = `${k}=`;
+    const prefix = `${k}: `;
     const wrapped = scrub(`${prefix}${v}`);
     return wrapped.startsWith(prefix) ? wrapped.slice(prefix.length) : wrapped;
   };

@@ -1489,7 +1489,7 @@ t('PART B #2: an unrecognized frontmatter line shape is tracked and surfaced via
   assert.match(fs.readFileSync(archivedPath, 'utf8'), /- one/);
 });
 
-t('PART B #4: a generic secret in a metadata field is caught once key context is restored', () => {
+t('PART B #4: a generic secret under an identifier key is caught, but a benign value is NOT over-redacted', () => {
   const { scrubSecrets } = require('../../plugins/forge/hooks/lib/redact');
   // Bare (no key context) does not match ANY pattern — this is the exact
   // failure mode the fix addresses.
@@ -1506,7 +1506,11 @@ t('PART B #4: a generic secret in a metadata field is caught once key context is
       'description: A note with a secret hiding in a legacy metadata field',
       'metadata:',
       '  type: project',
-      '  mySecretField: abc123XYZ456',
+      '  my_secret_field: abc123XYZ456',
+      // Bug 1 regression: an identifier-shaped key with a PLAIN-WORD value must
+      // survive — a tight `key=value` reconstruction would destroy this via
+      // isTightAssignment; the loose `key: value` reconstruction must not.
+      '  access_key: frontdoor',
       '---',
       '',
       'Ordinary body text, no secret here.',
@@ -1520,7 +1524,8 @@ t('PART B #4: a generic secret in a metadata field is caught once key context is
   assert.ok(!migratedRaw.includes('abc123XYZ456'), 'the secret value must not survive bare in the migrated metadata field');
   assert.match(migratedRaw, /\[REDACTED:secret-assignment\]/);
   const parsed = engine.parseRecord(migratedRaw);
-  assert.strictEqual(parsed.frontmatter.metadata.mySecretField, '[REDACTED:secret-assignment]', 'the key= prefix must be stripped back off, leaving only the scrubbed value');
+  assert.strictEqual(parsed.frontmatter.metadata.my_secret_field, '[REDACTED:secret-assignment]', 'the key: prefix must be stripped back off, leaving only the scrubbed value');
+  assert.strictEqual(parsed.frontmatter.metadata.access_key, 'frontdoor', 'Bug 1: a benign plain-word value under an identifier-shaped key must NOT be over-redacted');
 });
 
 t('PART B #6: `migrated` is documented in memory-v2.md\'s source vocabulary', () => {
