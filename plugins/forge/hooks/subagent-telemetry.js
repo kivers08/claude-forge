@@ -88,11 +88,19 @@ function parseFindings(text) {
 // strings or null. Mirrors the style of parseFindings above.
 function parseOutcome(text) {
   if (typeof text !== 'string') return null;
-  if (!/^\s*#{1,6}\s+OUTCOME\s*$/im.test(text)) return null;
+  const heading = /^[ \t]*#{1,6}[ \t]+OUTCOME[ \t]*$/im.exec(text);
+  if (!heading) return null;
+
+  // Scope parsing to the block: from the OUTCOME heading up to the next markdown
+  // heading (any level) or end-of-message. This prevents text BEFORE the block
+  // (a code sample or a quoted report) from overriding the block's real values.
+  const after = text.slice(heading.index + heading[0].length);
+  const nextHeading = /^[ \t]*#{1,6}[ \t]+/m.exec(after);
+  const block = nextHeading ? after.slice(0, nextHeading.index) : after;
 
   const field = (name) => {
     const re = new RegExp(`^\\s*${name}\\s*:\\s*(.*)$`, 'im');
-    const m = re.exec(text);
+    const m = re.exec(block);
     if (!m) return null;
     const v = m[1].trim();
     return v === '' ? null : v;

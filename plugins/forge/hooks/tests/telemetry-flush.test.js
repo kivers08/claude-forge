@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { mapRecordsToBatch } = require('../telemetry-flush');
+const { mapRecordsToBatch, retainUnsentLines } = require('../telemetry-flush');
 
 const HOOK = path.join(__dirname, '..', 'telemetry-flush.js');
 
@@ -94,8 +94,10 @@ t('unit_complete with an outcome object maps to an outcomes[] entry', () => {
     outcome: 'success',
     findings_confirmed: 3,
     tests_passed: true,
-    notes: 'all green',
   });
+  // Free-text notes must NEVER be forwarded, even when present on the record.
+  assert.ok(!('notes' in b.outcomes[0]), 'notes must not appear in outcomes[]');
+  assert.ok(!JSON.stringify(b).includes('all green'), 'notes value must not appear anywhere in the batch');
 });
 
 t('outcome field coercion: tests_passed/findings/label/notes null-fallbacks', () => {
@@ -122,11 +124,11 @@ t('outcome field coercion: tests_passed/findings/label/notes null-fallbacks', ()
   }], 'pk', 's1');
   assert.deepStrictEqual(b.outcomes[0], {
     unit_label: null, agent_name: 'unknown', outcome: 'fail',
-    findings_confirmed: null, tests_passed: false, notes: null,
+    findings_confirmed: null, tests_passed: false,
   });
   assert.deepStrictEqual(b.outcomes[1], {
     unit_label: 'p', agent_name: 'bug-fixer', outcome: 'partial',
-    findings_confirmed: 0, tests_passed: null, notes: null,
+    findings_confirmed: 0, tests_passed: null,
   });
 });
 
@@ -163,6 +165,66 @@ t('metadata-only: description and unknown free-text fields are dropped', () => {
 t('non-record garbage lines are skipped, not forwarded', () => {
   const b = mapRecordsToBatch([null, 'str', 42, { event: 'other' }, { event: 'invocation', tool: 'Bash' }], 'pk', 's1');
   assert.strictEqual(b.events.length, 1);
+});
+
+// ---- retainUnsentLines: successful flush must not drop unsent records ------
+
+t('retainUnsentLines drops the sent events (invocation, unit_complete)', () => {
+  const raw = [
+    JSON.stringify({ event: 'invocation', tool: 'Bash' }),
+    JSON.stringify({ event: 'unit_complete', agent_type: 'x' }),
+  ].join('\n') + '\n';
+  assert.strictEqual(retainUnsentLines(raw), '');
+});
+
+t('retainUnsentLines keeps every non-sent D10 record verbatim', () => {
+  const keepLines = [
+    JSON.stringify({ event: 'session_start', session_id: 's1' }),
+    JSON.stringify({ event: 'guard_deny', rule: 'r' }),
+    JSON.stringify({ event: 'guard_remind' }),
+    JSON.stringify({ event: 'rules_injected', n: 3 }),
+    JSON.stringify({ event: 'memory-redaction' }),
+  ];
+  const raw = [
+    JSON.stringify({ event: 'invocation', tool: 'Bash' }),
+    keepLines[0],
+    JSON.stringify({ event: 'unit_complete', agent_type: 'x' }),
+    keepLines[1],
+    keepLines[2],
+    keepLines[3],
+    keepLines[4],
+  ].join('\n') + '\n';
+  const kept = retainUnsentLines(raw);
+  assert.strictEqual(kept, keepLines.join('\n') + '\n');
+  // Original JSON preserved verbatim.
+  for (const line of keepLines) assert.ok(kept.includes(line));
+});
+
+t('retainUnsentLines is safe on empty / null / garbage input', () => {
+  assert.strictEqual(retainUnsentLines(''), '');
+  assert.strictEqual(retainUnsentLines(null), '');
+  assert.strictEqual(retainUnsentLines(undefined), '');
+  assert.strictEqual(retainUnsentLines('   \n  \n'), '');
+  // Unparseable lines are retained (we did not send them), never silently lost.
+  const raw = 'not json\n' + JSON.stringify({ event: 'invocation' }) + '\n';
+  assert.strictEqual(retainUnsentLines(raw), 'not json\n');
+  // Records with no/unknown event are kept too.
+  const raw2 = JSON.stringify({ event: 'other' }) + '\n' + JSON.stringify({ foo: 1 }) + '\n';
+  assert.strictEqual(retainUnsentLines(raw2), raw2);
+});
+
+// ---- https gate: a plaintext http:// sink must be rejected -----------------
+
+t('https gate: http:// sink is refused, buffer left intact', () => {
+  const { r, original, after } = runGate({
+    version: 1,
+    telemetry: {
+      enabled: true, sinkUrl: 'http://insecure.example/ingest',
+      tokenEnv: 'FORGE_TEST_TOKEN', projectKey: 'pk',
+    },
+  });
+  assert.strictEqual(r.status, 0, `exit ${r.status}; stderr: ${r.stderr}`);
+  assert.strictEqual(after, original, 'buffer must survive when sink is not HTTPS');
 });
 
 // ---- enabled-gate no-op: spawn the hook, prove no flush --------------------

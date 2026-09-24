@@ -19,7 +19,9 @@
 //   - NON-BLOCKING and NEVER THROWS. Any error — bad config, unreadable file,
 //     network failure, non-2xx — is swallowed and the hook exits 0. A telemetry
 //     failure must never affect the session.
-//   - The buffer is truncated ONLY on a 2xx response. On any failure the file is
+//   - On a 2xx response the buffer is REWRITTEN to retain exactly the records
+//     that were not part of the POST (the mapper only consumes invocation/
+//     unit_complete; all other D10 records survive). On any failure the file is
 //     left intact so the next flush retries the same records (at-least-once).
 //   - The ingest token is read from process.env[tokenEnv] and sent as a Bearer
 //     header. It is never logged, printed, or included in any output.
@@ -35,8 +37,11 @@ const HTTP_TIMEOUT_MS = 2000;
 // and any field not named below are dropped (D29 metadata-only). `outcomes` is
 // populated (D30) from the OUTCOME hand-back block parsed onto each
 // `unit_complete` record's `outcome` object by subagent-telemetry.js. It stays
-// metadata-only: `notes` is the only free-ish field, and it comes straight from
-// the OUTCOME block (agents keep it metadata); no other free text is copied.
+// metadata-only: every outcome field copied is structured/enumerable
+// (unit_label, agent_name, outcome enum, findings_confirmed int, tests_passed
+// bool). The free-text `notes` field is deliberately NOT forwarded — it is
+// unbounded worker text and could leak prompt/customer content; no free text is
+// copied anywhere in the batch.
 function mapRecordsToBatch(records, projectKey, sessionId) {
   const events = [];
   const outcomes = [];
@@ -70,7 +75,6 @@ function mapRecordsToBatch(records, projectKey, sessionId) {
           outcome: o.outcome,
           findings_confirmed: o.findings_confirmed ?? null,
           tests_passed: o.tests_passed === true ? true : o.tests_passed === false ? false : null,
-          notes: o.notes || null,
         });
       }
     }
@@ -81,6 +85,34 @@ function mapRecordsToBatch(records, projectKey, sessionId) {
     events,
     outcomes,
   };
+}
+
+// Events the mapper actually consumes and POSTs. Every OTHER record in the
+// buffer (session_start, guard_deny, guard_remind, rules_injected,
+// memory-redaction, etc.) is never sent and must survive a successful flush.
+const SENT_EVENTS = new Set(['invocation', 'unit_complete']);
+
+// Pure, exported, unit-testable. Given the raw JSONL buffer text, return the
+// lines to KEEP after a successful POST: every non-empty line whose parsed
+// record's `event` is NOT in SENT_EVENTS. Corrupt/unparseable lines are
+// retained (never silently dropped — only records we definitely sent are
+// removed). Original JSON text is preserved verbatim for each retained line.
+// Returns a string ready to write back (trailing newline when non-empty).
+function retainUnsentLines(rawText) {
+  const kept = [];
+  for (const line of String(rawText == null ? '' : rawText).split('\n')) {
+    if (!line.trim()) continue;
+    let rec = null;
+    try {
+      rec = JSON.parse(line);
+    } catch (e) {
+      kept.push(line); // unparseable: keep as-is, we did not send it
+      continue;
+    }
+    const event = rec && typeof rec === 'object' ? rec.event : undefined;
+    if (!SENT_EVENTS.has(event)) kept.push(line);
+  }
+  return kept.length ? kept.join('\n') + '\n' : '';
 }
 
 // Parse the append-only JSONL buffer into records, skipping unparseable lines.
@@ -130,6 +162,8 @@ async function main() {
   const sinkUrl = cfg.get(cfgObj, 'telemetry.sinkUrl', null);
   const tokenEnv = cfg.get(cfgObj, 'telemetry.tokenEnv', null);
   if (!sinkUrl || !tokenEnv) return;
+  // Enforce HTTPS: never send a Bearer token over plaintext HTTP.
+  if (!/^https:\/\//i.test(String(sinkUrl))) return;
   const token = process.env[tokenEnv];
   if (!token) return;
 
@@ -153,12 +187,14 @@ async function main() {
   const batch = mapRecordsToBatch(records, projectKey, sessionId);
   const { ok } = await postBatch(sinkUrl, token, batch);
 
-  // Truncate only on success; leave the buffer to retry on any failure.
+  // On success, rewrite the buffer to keep exactly the records we did NOT send
+  // (the mapper only consumes invocation/unit_complete); every other D10 record
+  // must survive. On any failure, leave the buffer intact to retry.
   if (ok) {
     try {
-      fs.writeFileSync(file, '');
+      fs.writeFileSync(file, retainUnsentLines(raw));
     } catch (e) {
-      // fail open: a failed truncate just means the next flush re-sends
+      // fail open: a failed rewrite just means the next flush re-sends
     }
   }
 }
@@ -169,4 +205,4 @@ main()
   })
   .finally(() => process.exit(0));
 
-module.exports = { mapRecordsToBatch };
+module.exports = { mapRecordsToBatch, retainUnsentLines };

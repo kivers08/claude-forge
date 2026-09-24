@@ -416,7 +416,8 @@
         },
         "sinkUrl": {
           "type": "string",
-          "description": "HTTPS endpoint telemetry batches are POSTed to (the consuming project's ingest URL). Generic; forge ships no default."
+          "pattern": "^https://",
+          "description": "HTTPS endpoint telemetry batches are POSTed to (the consuming project's ingest URL). Must be HTTPS (https://…); a plaintext http:// sink is rejected so the Bearer token is never sent in the clear. Generic; forge ships no default."
         },
         "projectKey": {
           "type": "string",

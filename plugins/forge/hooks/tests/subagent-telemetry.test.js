@@ -118,6 +118,48 @@ t('garbage / non-integer findings_confirmed becomes null', () => {
   assert.strictEqual(parseOutcome(text2).findings_confirmed, null);
 });
 
+t('text before the OUTCOME block cannot override the block values', () => {
+  const text = [
+    'Here is a quoted report from another run:',
+    '',
+    'outcome: fail',
+    'unit_label: wrong-unit',
+    'tests_passed: false',
+    'findings_confirmed: 99',
+    'notes: leaked earlier text',
+    '',
+    '### OUTCOME',
+    'outcome: success',
+    'unit_label: right-unit',
+    'tests_passed: true',
+    'findings_confirmed: 2',
+    'notes: real notes',
+  ].join('\n');
+  assert.deepStrictEqual(parseOutcome(text), {
+    outcome: 'success',
+    unit_label: 'right-unit',
+    tests_passed: true,
+    findings_confirmed: 2,
+    notes: 'real notes',
+  });
+});
+
+t('fields after the next heading are not read into the block', () => {
+  const text = [
+    '### OUTCOME',
+    'outcome: partial',
+    'unit_label: u',
+    '',
+    '## Appendix',
+    'outcome: success',
+    'tests_passed: true',
+  ].join('\n');
+  const r = parseOutcome(text);
+  assert.strictEqual(r.outcome, 'partial');
+  assert.strictEqual(r.unit_label, 'u');
+  assert.strictEqual(r.tests_passed, null);
+});
+
 t('outcome value is case-insensitive and lowercased', () => {
   const text = ['### OUTCOME', 'outcome: SUCCESS'].join('\n');
   assert.strictEqual(parseOutcome(text).outcome, 'success');
