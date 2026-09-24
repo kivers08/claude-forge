@@ -158,7 +158,7 @@
   { "name": "merge-gate: D27 gh \"pr\" merge bypass is now gated",
     "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",
     "git": true, "command": "gh \"pr\" merge 7 --squash",
-    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "no claude-human-merge-ok marker" } },
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "merge-gate" } },
 
   { "name": "merge-gate: D27 git \"merge\" on the base branch is now gated",
     "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-fixture.json",

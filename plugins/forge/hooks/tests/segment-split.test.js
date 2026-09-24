@@ -45,6 +45,13 @@ t('D27: intra-word quote concatenation matches (me""rge)', () => {
   assert.strictEqual(seq('gh pr me""rge 7', ['gh', 'pr', 'merge']), true);
 });
 
+t('D27: a backslash-escaped word stays a bare, matching token (merg\\e)', () => {
+  assert.strictEqual(seq('gh pr merg\\e 7', ['gh', 'pr', 'merge']), true);
+  const toks = tokenize('gh pr merg\\e');
+  assert.strictEqual(toks[2].quoted, false, 'an escaped word is not opaque data');
+  assert.strictEqual(toks[2].value, 'merge');
+});
+
 t('D27: quoted --squash flag reads as the flag, not data', () => {
   const words = tokenize('gh pr merge 7 "--squash"').filter((x) => !x.quoted).map((x) => x.value);
   assert.ok(words.includes('--squash'), '--squash should survive as an unquoted-equivalent word');

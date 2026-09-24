@@ -1,9 +1,27 @@
 ---
 name: security-hasunquotedsequence-bypass
-description: hasUnquotedSequence (lib/segment-split.js) can be defeated by quoting a single word of a real command, letting it slip past every guard that uses it (merge-gate, pr-create, etc) — check this on every guard-touching diff.
+description: (FIXED in D27, branch fix/d27-quote-bypass) hasUnquotedSequence could be defeated by quoting a single word of a real command. Fix lives in tokenize() via BARE_WORD. Kept for history + to recheck on future segment-split changes.
 metadata:
   type: project
 ---
+
+**STATUS 2026-09-24: FIXED.** Branch `fix/d27-quote-bypass` (commit 3516c19)
+fixed this at the source: `tokenize()` now only sets `quoted:true` when a
+token's value carries whitespace or a shell metachar (`BARE_WORD` regex);
+a cosmetically-quoted bare word like `"pr"`, `'merge'`, `me""rge`, or an
+escaped `\pr` reduces to the unquoted word. Because every consumer
+(`hasUnquotedSequence`, `subcommandAfter`, merge-gate's `ghMergeIdentifier`
+and `--squash` filter, pr-create/git-refspec/worktree-commit) reads the
+`quoted` flag, the one-line source change closes all of them at once. The
+fix only ever *removes* `quoted`, so it is strictly fail-closed (more likely
+to deny); no false-negative regression. pre-bash.js dispatcher also now
+tests the manifest `match` regex against the quote-stripped token stream so
+the guard is actually dispatched. Verified: no residual bypass via quote/
+escape/concat/tab/case. `$()`/backtick command substitution is out of scope
+(documented) and unchanged. Original writeup below for history.
+
+---
+
 
 `plugins/forge/hooks/lib/segment-split.js`'s `hasUnquotedSequence(tokens, words)`
 requires every matched word to be an UNQUOTED token. This correctly avoids a
