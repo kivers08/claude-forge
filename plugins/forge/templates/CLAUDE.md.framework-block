@@ -70,6 +70,30 @@ See `forge.md` (written alongside `.claude/forge.json` by `/forge:bootstrap`)
 for what each `forge.json` key controls and why this project's values were
 chosen.
 
+### Telemetry
+
+Telemetry is opt-in and metadata-only. It is off unless the project enables it
+(`telemetry.enabled`). When enabled, only structured metadata is emitted to the
+configured sink — never prompt or response text, and never customer content. The
+ingest token lives in an environment secret named by `telemetry.tokenEnv`; it is
+never stored in `.claude/forge.json`.
+
+### Memory
+
+Agent memory uses Claude Code's native per-agent layout with a
+propose→curate→commit loop. A worker agent emits a `### MEMORY PROPOSAL` block in
+its hand-back; the main context is the **sole writer** that curates and commits
+it. Recall is read-only: an agent reads its own `MEMORY.md` at task start
+(`memory.recall`). Built-in auto-memory is kept off — it is binary with no
+recall-only mode — so all writes stay gated through this loop.
+
+### Deploys and host infrastructure
+
+Claude never triggers a deploy or any host/infra write operation. Any host MCP
+(e.g. xcloud) is wired as a user-scoped connector and used for **read-only
+diagnostics only** (logs, deploy errors, monitoring), with its credential in an
+environment secret. Deploys and server/panel changes are owner-only.
+
 > **The T0 auto-merge exception requires branch protection.** Skipping the
 > human-merge marker for T0 is only safe because GitHub holds an `--auto`
 > merge until required status checks pass. If the base branch has no required
