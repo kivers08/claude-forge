@@ -33,10 +33,13 @@ const HTTP_TIMEOUT_MS = 2000;
 // Pure, exported, unit-testable. Maps buffered telemetry records to the
 // bluegrass ingest batch shape. Allowlist only — the free-text `description`
 // and any field not named below are dropped (D29 metadata-only). `outcomes` is
-// intentionally always [] here: the OUTCOME hand-back block that populates it
-// is a separate later unit; the emitter still sends the (empty) array.
+// populated (D30) from the OUTCOME hand-back block parsed onto each
+// `unit_complete` record's `outcome` object by subagent-telemetry.js. It stays
+// metadata-only: `notes` is the only free-ish field, and it comes straight from
+// the OUTCOME block (agents keep it metadata); no other free text is copied.
 function mapRecordsToBatch(records, projectKey, sessionId) {
   const events = [];
+  const outcomes = [];
   const list = Array.isArray(records) ? records : [];
   for (const r of list) {
     if (!r || typeof r !== 'object') continue;
@@ -58,13 +61,25 @@ function mapRecordsToBatch(records, projectKey, sessionId) {
         tool_calls: null,
         duration_ms: null,
       });
+      const o = r.outcome;
+      if (o && typeof o === 'object'
+        && (o.outcome === 'success' || o.outcome === 'fail' || o.outcome === 'partial')) {
+        outcomes.push({
+          unit_label: o.unit_label || null,
+          agent_name: r.agent_type || 'unknown',
+          outcome: o.outcome,
+          findings_confirmed: o.findings_confirmed ?? null,
+          tests_passed: o.tests_passed === true ? true : o.tests_passed === false ? false : null,
+          notes: o.notes || null,
+        });
+      }
     }
   }
   return {
     project_key: projectKey || null,
     session_id: sessionId || null,
     events,
-    outcomes: [],
+    outcomes,
   };
 }
 

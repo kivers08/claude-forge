@@ -59,12 +59,75 @@ t('unit_complete record maps to a complete event', () => {
   assert.strictEqual(nameless.events[0].name, 'unknown');
 });
 
-t('outcomes is always an empty array (populated by a later unit)', () => {
+t('unit_complete without an outcome object yields no outcome entry', () => {
   const b = mapRecordsToBatch(
     [{ event: 'invocation', skill: 'x' }, { event: 'unit_complete', agent_type: 'y' }],
     'pk', 's1',
   );
   assert.deepStrictEqual(b.outcomes, []);
+  // A null outcome, or a garbage/unknown outcome value, also produces nothing.
+  const b2 = mapRecordsToBatch([
+    { event: 'unit_complete', agent_type: 'y', outcome: null },
+    { event: 'unit_complete', agent_type: 'z', outcome: { outcome: 'bogus', unit_label: 'x' } },
+  ], 'pk', 's1');
+  assert.deepStrictEqual(b2.outcomes, []);
+});
+
+t('unit_complete with an outcome object maps to an outcomes[] entry', () => {
+  const b = mapRecordsToBatch([{
+    event: 'unit_complete',
+    agent_type: 'implementer',
+    outcome: {
+      outcome: 'success',
+      unit_label: 'forge-outcome-telemetry',
+      tests_passed: true,
+      findings_confirmed: 3,
+      notes: 'all green',
+    },
+  }], 'pk', 's1');
+  // The complete event is still emitted alongside the outcome.
+  assert.strictEqual(b.events.length, 1);
+  assert.strictEqual(b.events[0].phase, 'complete');
+  assert.deepStrictEqual(b.outcomes[0], {
+    unit_label: 'forge-outcome-telemetry',
+    agent_name: 'implementer',
+    outcome: 'success',
+    findings_confirmed: 3,
+    tests_passed: true,
+    notes: 'all green',
+  });
+});
+
+t('outcome field coercion: tests_passed/findings/label/notes null-fallbacks', () => {
+  const b = mapRecordsToBatch([{
+    event: 'unit_complete',
+    // no agent_type -> agent_name falls back to 'unknown'
+    outcome: {
+      outcome: 'fail',
+      unit_label: null,
+      tests_passed: false,
+      findings_confirmed: null,
+      notes: null,
+    },
+  }, {
+    event: 'unit_complete',
+    agent_type: 'bug-fixer',
+    outcome: {
+      outcome: 'partial',
+      unit_label: 'p',
+      tests_passed: 'n/a', // non-boolean -> null
+      findings_confirmed: 0,
+      notes: '',
+    },
+  }], 'pk', 's1');
+  assert.deepStrictEqual(b.outcomes[0], {
+    unit_label: null, agent_name: 'unknown', outcome: 'fail',
+    findings_confirmed: null, tests_passed: false, notes: null,
+  });
+  assert.deepStrictEqual(b.outcomes[1], {
+    unit_label: 'p', agent_name: 'bug-fixer', outcome: 'partial',
+    findings_confirmed: 0, tests_passed: null, notes: null,
+  });
 });
 
 t('project_key and session_id are carried onto the batch', () => {

@@ -70,11 +70,74 @@ function parseFindings(text) {
   };
 }
 
+// Parses the shared OUTCOME hand-back block (D29/D30) out of an agent's final
+// message. Agents emit this EXACT block; we parse it verbatim:
+//
+//   ### OUTCOME
+//   outcome: success | fail | partial
+//   unit_label: <short-kebab-slug>
+//   tests_passed: true | false | n/a
+//   findings_confirmed: <integer> | n/a
+//   notes: <short metadata>
+//
+// Returns { outcome, unit_label, tests_passed, findings_confirmed, notes } with
+// normalized values, or null if the block is absent. Fail-open: never throws.
+// `outcome` is kept only if in {success,fail,partial} else null; `tests_passed`
+// coerces "true"->true / "false"->false / "n/a"|missing->null;
+// `findings_confirmed` is an integer or null; `unit_label`/`notes` are trimmed
+// strings or null. Mirrors the style of parseFindings above.
+function parseOutcome(text) {
+  if (typeof text !== 'string') return null;
+  if (!/^\s*#{1,6}\s+OUTCOME\s*$/im.test(text)) return null;
+
+  const field = (name) => {
+    const re = new RegExp(`^\\s*${name}\\s*:\\s*(.*)$`, 'im');
+    const m = re.exec(text);
+    if (!m) return null;
+    const v = m[1].trim();
+    return v === '' ? null : v;
+  };
+
+  const rawOutcome = field('outcome');
+  const outcome = rawOutcome && /^(success|fail|partial)$/i.test(rawOutcome)
+    ? rawOutcome.toLowerCase()
+    : null;
+
+  const rawTests = field('tests_passed');
+  let tests_passed = null;
+  if (rawTests !== null) {
+    if (/^true$/i.test(rawTests)) tests_passed = true;
+    else if (/^false$/i.test(rawTests)) tests_passed = false;
+    else tests_passed = null; // "n/a" or anything else -> null
+  }
+
+  const rawFindings = field('findings_confirmed');
+  let findings_confirmed = null;
+  if (rawFindings !== null && /^-?\d+$/.test(rawFindings)) {
+    findings_confirmed = Number(rawFindings);
+  }
+
+  return {
+    outcome,
+    unit_label: field('unit_label'),
+    tests_passed,
+    findings_confirmed,
+    notes: field('notes'),
+  };
+}
+
 function main() {
   const payload = io.parsePayload(io.readStdin());
   const dataDir = io.dataDir(process.argv);
   const agentType = payload.agent_type || null;
   const message = typeof payload.last_assistant_message === 'string' ? payload.last_assistant_message : null;
+
+  let outcome = null;
+  try {
+    outcome = parseOutcome(message);
+  } catch (e) {
+    outcome = null; // fail open
+  }
 
   io.telemetry(dataDir, {
     event: 'unit_complete',
@@ -83,12 +146,19 @@ function main() {
     agent_id: payload.agent_id || null,
     output_chars: message === null ? null : message.length,
     findings: isReviewer(agentType) ? parseFindings(message) : null,
+    outcome,
   });
 }
 
-try {
-  main();
-} catch (e) {
-  // fail open
+// Exported for unit testing as a pure function. The module also runs main()
+// when invoked directly as a hook.
+module.exports = { parseOutcome, parseFindings, isReviewer };
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (e) {
+    // fail open
+  }
+  process.exit(0);
 }
-process.exit(0);
