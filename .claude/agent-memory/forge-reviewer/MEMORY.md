@@ -1,2 +1,3 @@
 - [hasUnquotedSequence quoting bypass](security_hasUnquotedSequence_bypass.md) — a single quoted word (e.g. `gh "pr" merge`) defeats merge-gate and any guard built on this helper; pre-existing, repo-wide.
 - [writeRecord extra unscrubbed](security_writeRecord_extra_unscrubbed.md) — memory-v2 writeRecord scrubs body+frontmatter but not opts.extra; secrets in extra fields reach disk.
+- [memmigrate multiline quote (latent)](bug_memmigrate_multiline_quote.md) — memory-migrate yamlScalar quotes but doesn't escape newlines; latent today, lands as a bug if a richer parser ever feeds it.
