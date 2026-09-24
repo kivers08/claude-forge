@@ -404,6 +404,59 @@
           "description": "Repo-relative directory holding per-PR fragments (e.g. 'changelog.d'). Each fragment is <slug>.md with a section name line and one or more bullets."
         }
       }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Metadata-only telemetry sink (D29). Hooks buffer records to a local JSONL file; a flush hook batches and POSTs them to the consuming project's ingest endpoint. Best-effort and non-blocking; forge itself hardcodes no URL.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch for telemetry emission and flush. Default off; telemetry is inert unless the consuming project opts in."
+        },
+        "sinkUrl": {
+          "type": "string",
+          "description": "HTTPS endpoint telemetry batches are POSTed to (the consuming project's ingest URL). Generic; forge ships no default."
+        },
+        "projectKey": {
+          "type": "string",
+          "description": "Identifier tagging every emitted record so one sink can hold telemetry from multiple repos."
+        },
+        "tokenEnv": {
+          "type": "string",
+          "description": "NAME of the environment variable holding the per-repo ingest token. The token itself is never stored in config."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["metadata-only"],
+          "default": "metadata-only",
+          "description": "Hard constraint on what is sent: only metadata is ever transmitted, never prompt/response or customer content."
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Agent memory policy over Claude Code's native per-agent memory layout (D28/D30). Native auto-memory stays off; forge gates writes through a propose-then-curate flow.",
+      "properties": {
+        "recall": {
+          "type": "boolean",
+          "description": "Whether agents read their native-layout memory (MEMORY.md hub + topic spokes) at task start."
+        },
+        "writeMode": {
+          "type": "string",
+          "enum": ["propose-curate"],
+          "default": "propose-curate",
+          "description": "Write gating: agents propose lessons in a hand-back block and the main context is the sole writer. Claude Code's built-in auto-memory is binary with no recall-only mode, so writes are gated this way."
+        },
+        "excludeFromWrite": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Agent names whose proposals are never persisted (compliance carve-out for consuming projects with sensitive agents)."
+        }
+      }
     }
   }
 }
