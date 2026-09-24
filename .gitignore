@@ -13,3 +13,6 @@
 # should add the matching entries here itself.
 /changelog.d/.closeout-staging/
 /CHANGELOG.md.tmp
+
+# Local git worktrees used for delegated/agent work — never committed.
+/.claude/worktrees/
