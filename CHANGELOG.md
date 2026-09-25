@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 — 2026-09-25
+
+### Security
+
+- Close the D27 guard bypass: quoting a single word of a merge command (`gh "pr" merge`, `git "merge"`, `me""rge`) no longer evades the merge gate or any other guard. Fixed in both the tokenizer (`lib/segment-split.js`, cosmetic quotes no longer mark a token as data) and the PreToolUse dispatcher (`pre-bash.js`, the prefilter now also tests the quote-stripped token stream).
+
+### Fixed
+
+- Telemetry flush now honors an `accepted:false` acknowledgment: a 2xx response whose JSON body has `accepted === false` is treated as a transient rejection and its records are retained (empty/non-JSON/other bodies still count as success).
+- Telemetry flush rotates the buffer atomically (rename to a unique `.sending` sibling) before reading, so records appended by concurrent hooks during a flush are no longer lost; unsent records are appended back to the live buffer, never overwritten.
+- Telemetry flush groups buffered records by their own `session_id` and sends one batch per session, so a shared cross-session buffer no longer mixes sessions into a single batch.
+- Telemetry flush splits each session's records into size-bounded chunks (new `telemetry.maxBatchBytes` config, default 90000) so an oversized POST cannot be permanently rejected; a single record larger than the cap is dropped and noted via the telemetry log.
+
 ## 0.2.0 — 2026-09-24
 
 ### Added
