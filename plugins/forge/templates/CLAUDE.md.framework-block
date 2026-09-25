@@ -32,10 +32,10 @@ explicit human "merge".
 
 The merge-gate hook itself carries **no tier exception**: every merge the
 agent runs into the base branch requires the human marker, T0 included.
-(Known gap, not a tier exception: the guard matches on *unquoted* tokens, so
-quoting one word — `gh "pr" merge 7 --squash` — currently slips past it
-entirely. Tracked as D27 and unfixed; the guarantee below is what the design
-intends, not yet what the code enforces.) The
+(The guard classifies tokens by script-agnostic quoting, so quoting one word —
+`gh "pr" merge 7 --squash`, ASCII or non-ASCII branch names alike — no longer
+slips past it. Tracked as D27, now fixed; the guarantee below is what the code
+enforces.) The
 two are not in tension, because they act in different places. The hook gates
 the *agent's* own `gh pr merge`. The T0 fast path is performed by the CI job,
 which never goes through the hook and resolves its inputs from the base ref.
@@ -51,9 +51,7 @@ exception was removed from the hook rather than patched again.
 ### Merge-gate contract
 
 The gate: nothing merges into the base branch (`git.baseBranch`, default
-`main`) without a human running `touch .git/claude-human-merge-ok` first —
-subject to the D27 tokenizer gap noted above, which is a bug to fix, not a
-sanctioned path.
+`main`) without a human running `touch .git/claude-human-merge-ok` first.
 That marker is valid for 15 minutes from its mtime; a stale marker is
 treated the same as no marker — it was yesterday's decision, not today's.
 The gate also requires a squash merge (`git.squashOnly`, default `true`).

@@ -195,13 +195,17 @@ per-agent scoping or the git-visibility that make it safe.
 
 ## 10. Known gaps (as of 2026-09-13)
 
-- **D27** — `hasUnquotedSequence` (`plugins/forge/hooks/lib/segment-split.js`)
-  can be bypassed by quoting one word: `gh "pr" merge 7 --squash` skips the
-  merge-gate entirely, marker and all. The same class affects a raw API merge
-  (`gh api -X PUT …/pulls/N/merge`), which the guard never sees. On a private
-  repo the local guard is the *only* enforcement, so this is the highest-value
-  fix. Its own unit; fix on *effect* (anything that lands a commit on the base
-  branch), not on command shape.
+- **D27 — quote bypass: FIXED (2026-09-24).** `gh "pr" merge 7 --squash` no
+  longer skips the merge gate. Fixed at both layers: the tokenizer
+  (`plugins/forge/hooks/lib/segment-split.js`) stops treating a cosmetically
+  quoted bare word as data, and the PreToolUse dispatcher (`pre-bash.js`)
+  prefilter now also matches against the quote-stripped token stream so the
+  guard is actually dispatched. See `docs/decisions.md` D27.
+  **Still open (its own unit):** a raw API merge
+  (`gh api -X PUT …/pulls/N/merge`) is a different command shape `merge-gate`'s
+  `match` (`gh pr merge|git merge`) never sees. Fix on *effect* (anything that
+  lands a commit on the base branch), not command shape. On a private repo the
+  local guard is the *only* enforcement, so this vector still matters.
 - **D20 blocker** — branch protection and rulesets are unavailable on a private
   repo under a free org plan (both endpoints 403). So D20's checks can be
   *posted* but never *required*, and the T0 CI fast path stays dormant (it
