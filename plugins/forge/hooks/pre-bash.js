@@ -37,11 +37,18 @@ function main() {
   const reminders = [];
   for (const segment of seg.split(command)) {
     const segmentLower = segment.toLowerCase();
+    const tokens = seg.tokenize(segment);
+    // D27: the raw segment `gh "pr" merge` does not match a `gh\s+pr\s+merge`
+    // prefilter, so the guard would never even be dispatched. Also test the
+    // token stream rejoined with cosmetic quotes stripped — `gh pr merge` — so
+    // per-word quoting cannot dodge dispatch. Over-matching is harmless: each
+    // guard re-confirms against ctx.tokens in check() before it denies.
+    const normalizedLower = tokens.map((t) => t.value).join(' ').toLowerCase();
     const ctx = {
       segment,
       segmentLower,
       command,
-      tokens: seg.tokenize(segment),
+      tokens,
       paths: seg.extractPaths(segment),
       payload,
       config,
@@ -58,7 +65,7 @@ function main() {
         } catch (e) {
           continue;
         }
-        if (!re.test(segmentLower)) continue;
+        if (!re.test(segmentLower) && !re.test(normalizedLower)) continue;
       }
 
       let guard;

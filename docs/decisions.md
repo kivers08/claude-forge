@@ -596,7 +596,7 @@ confirmation" note for full detail.
 
 ## Addendum 2026-09-12: pre-existing guard-tokenizer bypass found during D19 review
 
-### D27 — `hasUnquotedSequence` can be bypassed by quoting one word (not yet fixed)
+### D27 — `hasUnquotedSequence` can be bypassed by quoting one word (FIXED 2026-09-24)
 Discovered by the `forge:reviewer` agent while reviewing the D19 merge-gate
 T0 carve-out (`claude/u6-merge-gate-t0`, PR into `claude/units`). Any guard
 built on `plugins/forge/hooks/lib/segment-split.js`'s `hasUnquotedSequence`
@@ -611,6 +611,32 @@ argument to another command" from "one word of a real command happens to be
 quoted" in `segment-split.js`, then re-verify every guard that depends on
 `hasUnquotedSequence`/`subcommandAfter`.
 
+**Resolution (2026-09-24, `fix/d27-quote-bypass`).** Fixed at two layers, since
+the bypass lived in both:
+1. **Tokenizer (`lib/segment-split.js`).** `tokenize` now marks a token
+   `quoted` only when quoting was *load-bearing* — its value carries whitespace
+   or a shell metacharacter (a spaced blob like `echo "gh pr merge"`, one
+   argument). A cosmetically-quoted bare word (`"pr"`, `'merge'`, `me""rge`) is
+   byte-identical to its unquoted form in bash, so it is `quoted: false` and
+   participates in a sequence match. This is strictly in the safe direction: it
+   can only ever *downgrade* a quoted flag, making guards more likely to fire,
+   never less. Fixes every consumer at once — `hasUnquotedSequence`,
+   `subcommandAfter`, `ghMergeIdentifier`, and merge-gate's `--squash` filter.
+2. **Dispatcher prefilter (`pre-bash.js`).** The `guards.json` `match` regex is
+   a raw-text prefilter, so `gh "pr" merge` never matched `gh\s+pr\s+merge` and
+   the guard was never dispatched — the tokenizer fix alone could not help. The
+   dispatcher now also tests the regex against the token stream rejoined with
+   cosmetic quotes stripped. Over-matching is harmless because each guard
+   re-confirms against `ctx.tokens` in `check()` before denying.
+
+Covered by `hooks/tests/segment-split.test.js` (the tokenizer, incl. the
+`me""rge` concatenation variant) and two end-to-end `cases.json` entries
+(`gh "pr" merge` and `git "merge"` on the base branch, both now gated).
+
+**Still open — its own unit (fix on *effect*, not command shape):** a raw API
+merge (`gh api -X PUT …/pulls/N/merge`) bypasses `merge-gate` entirely because
+its `match` is `gh pr merge|git merge`; the API form is a different command
+shape the guard never sees. Tracked in `docs/plans/forge-adoption.md` §10.
 ### D28 — Memory v2: native typed memory, hybrid recall, earned-lesson measurement
 Transcribed from `docs/plans/memory-v2.md` (the `brainstorm` proposal the owner
 accepted, edited, and re-scoped), which is referenced across the codebase as
