@@ -52,6 +52,17 @@ t('D27: a backslash-escaped word stays a bare, matching token (merg\\e)', () => 
   assert.strictEqual(toks[2].value, 'merge');
 });
 
+t('D27: cosmetically-quoted non-ASCII bare word is NOT quoted (Unicode bypass closed)', () => {
+  // `feature/é` has no whitespace and no shell metacharacter, so its quoting is
+  // cosmetic — an ASCII `\w` test wrongly kept it quoted, dropping the branch id
+  // and resolving the current PR instead. It must classify as a bare word.
+  const toks = tokenize('gh pr merge "feature/é" --squash');
+  const branch = toks.find((x) => x.value === 'feature/é');
+  assert.ok(branch, 'branch identifier token present');
+  assert.strictEqual(branch.quoted, false, 'non-ASCII bare word must not stay quoted');
+  assert.strictEqual(seq('gh pr merge "feature/é"', ['gh', 'pr', 'merge', 'feature/é']), true);
+});
+
 t('D27: quoted --squash flag reads as the flag, not data', () => {
   const words = tokenize('gh pr merge 7 "--squash"').filter((x) => !x.quoted).map((x) => x.value);
   assert.ok(words.includes('--squash'), '--squash should survive as an unquoted-equivalent word');

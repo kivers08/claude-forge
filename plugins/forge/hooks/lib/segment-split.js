@@ -102,7 +102,17 @@ function split(command) {
 // there the quoting was load-bearing (`"gh pr merge"` is one argument, not a
 // command). Identifier-ish punctuation (`. / : @ % + , = ^ -`) stays bare so a
 // quoted PR number/URL/flag still reads as itself.
-const BARE_WORD = /^[\w./:@%+,=^-]+$/;
+//
+// Classification is by the PRESENCE of whitespace or a shell metacharacter, not
+// by an allow-list of "word" characters: an ASCII `\w`-style test wrongly treats
+// any non-ASCII letter (`feature/é`) as non-bare, so a cosmetically-quoted
+// non-ASCII branch name stayed `quoted: true` and slipped the merge gate (D27).
+// This test is script-agnostic — a letter is a letter, ASCII or not. It can only
+// ever DOWNGRADE a quoted flag (a bare word carries no metachar), never set one.
+const NON_BARE = /[\s&|;<>(){}$'"`*?[\]~#!\\]/u;
+function isBareWord(value) {
+  return value.length > 0 && !NON_BARE.test(value);
+}
 
 // Split one segment into shell-ish words, with quotes removed. `quoted` marks a
 // token whose meaning DEPENDS on quoting — a spaced/metachar blob like
@@ -123,7 +133,7 @@ function tokenize(segment) {
   const flush = () => {
     // A cosmetically-quoted bare word (`"pr"`) is the unquoted word; only a
     // token whose value carries whitespace or a metachar stays `quoted` (D27).
-    if (has) out.push({ value: buf, quoted: quoted && !BARE_WORD.test(buf) });
+    if (has) out.push({ value: buf, quoted: quoted && !isBareWord(buf) });
     buf = '';
     has = false;
     quoted = false;
