@@ -15,7 +15,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const {
   mapRecordsToBatch, retainUnsentLines, parseItems,
-  groupBySession, chunkSessionItems, isAcceptedBody,
+  groupBySession, chunkSessionItems, isAcceptedBody, postBatch,
 } = require('../telemetry-flush');
 
 const HOOK = path.join(__dirname, '..', 'telemetry-flush.js');
@@ -312,6 +312,34 @@ t('groupBySession: records from two sessions produce two groups keyed correctly'
   assert.strictEqual(batchB.events.length, 1);
 });
 
+t('groupBySession: numeric and string session ids are kept distinct (no string coercion)', () => {
+  const items = parseItems([
+    JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 1 }),
+    JSON.stringify({ event: 'invocation', tool: 'Read', session_id: '1' }),
+    JSON.stringify({ event: 'invocation', tool: 'Edit', session_id: 1 }),
+  ].join('\n') + '\n');
+  const groups = groupBySession(items);
+  assert.strictEqual(groups.length, 2, 'numeric 1 and string "1" must not merge');
+  const numeric = groups.find((g) => g.sessionId === 1);
+  const string = groups.find((g) => g.sessionId === '1');
+  assert.ok(numeric && string, 'both a numeric and a string group exist');
+  assert.strictEqual(numeric.items.length, 2);
+  assert.strictEqual(string.items.length, 1);
+});
+
+t('groupBySession: an object session_id with a non-callable toString does not throw', () => {
+  // A stringify of this key would throw; using the value itself as the Map key must not.
+  const weird = { toString: null };
+  const items = [
+    { raw: 'x', rec: { event: 'invocation', tool: 'Bash', session_id: weird } },
+    { raw: 'y', rec: { event: 'invocation', tool: 'Read', session_id: weird } },
+  ];
+  let groups;
+  assert.doesNotThrow(() => { groups = groupBySession(items); });
+  assert.strictEqual(groups.length, 1, 'same object identity groups together');
+  assert.strictEqual(groups[0].items.length, 2);
+});
+
 t('groupBySession: records without a session_id fall under the null group', () => {
   const items = parseItems([
     JSON.stringify({ event: 'invocation', tool: 'Bash' }),
@@ -402,5 +430,90 @@ t('retain-on-failure: failed chunk records + non-sent records are kept verbatim,
   assert.ok(!kept.includes(okLine), 'a successfully sent record must not be retained');
 });
 
-console.log(`\n${ran - failed}/${ran} passed`);
-process.exit(failed ? 1 : 0);
+// ---- orphaned *.sending recovery on startup --------------------------------
+
+t('startup recovery: a stranded *.sending snapshot is appended back and re-processed', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-flush-recover-'));
+  const projDir = path.join(tmp, 'project');
+  const dataDir = path.join(tmp, 'data');
+  fs.mkdirSync(path.join(projDir, '.claude'), { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  // Fully enabled config so main() runs past the gate to the recovery/rotation.
+  fs.writeFileSync(path.join(projDir, '.claude', 'forge.json'), JSON.stringify({
+    version: 1,
+    telemetry: {
+      enabled: true, sinkUrl: 'https://127.0.0.1:1/ingest',
+      tokenEnv: 'FORGE_TEST_TOKEN', projectKey: 'pk',
+    },
+  }));
+  const bufferFile = path.join(dataDir, 'telemetry.jsonl');
+  // Live buffer holds one non-sent record (survives a flush untouched).
+  const liveLine = JSON.stringify({ event: 'session_start', session_id: 's-live' });
+  fs.writeFileSync(bufferFile, liveLine + '\n');
+  // A stranded snapshot from a crashed prior run, also non-sent so no POST is made.
+  const staleFile = path.join(dataDir, 'telemetry.jsonl.99999.1.sending');
+  const staleLine = JSON.stringify({ event: 'guard_deny', rule: 'r', session_id: 's-stale' });
+  fs.writeFileSync(staleFile, staleLine + '\n');
+
+  const payload = JSON.stringify({ session_id: 's-run', cwd: projDir, hook_event_name: 'Stop' });
+  const r = spawnSync(process.execPath, [HOOK, dataDir], {
+    input: payload, encoding: 'utf8',
+    env: { ...process.env, FORGE_TEST_TOKEN: 'unused' },
+  });
+  assert.strictEqual(r.status, 0, `exit ${r.status}; stderr: ${r.stderr}`);
+  const after = fs.readFileSync(bufferFile, 'utf8');
+  // Both the original live record and the recovered stale record are present.
+  assert.ok(after.includes(liveLine), 'original live record retained');
+  assert.ok(after.includes(staleLine), 'stranded snapshot record recovered into live buffer');
+  // The stale snapshot file is gone.
+  assert.ok(!fs.existsSync(staleFile), 'stale *.sending file must be unlinked');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ---- ack handling: postBatch retain/clear with a stubbed global fetch -------
+
+async function tAsync(name, fn) {
+  ran++;
+  try {
+    await fn();
+    console.log(`ok   ${name}`);
+  } catch (e) {
+    failed++;
+    console.error(`FAIL ${name}\n  ${e.message}`);
+  }
+}
+
+async function runAsyncTests() {
+  const realFetch = global.fetch;
+  const batch = mapRecordsToBatch([{ event: 'invocation', tool: 'Bash', session_id: 's' }], 'pk', 's');
+
+  await tAsync('ack: 2xx {accepted:false} -> not ok (records retained)', async () => {
+    global.fetch = async () => ({ status: 200, text: async () => JSON.stringify({ accepted: false }) });
+    const { ok } = await postBatch('https://sink.example/ingest', 't', batch);
+    assert.strictEqual(ok, false, 'a 2xx {accepted:false} must not clear records');
+  });
+
+  await tAsync('ack: 2xx {accepted:true} / empty / non-JSON -> ok (records cleared)', async () => {
+    for (const body of [JSON.stringify({ accepted: true }), '', 'OK']) {
+      global.fetch = async () => ({ status: 200, text: async () => body }); // eslint-disable-line no-loop-func
+      const { ok } = await postBatch('https://sink.example/ingest', 't', batch); // eslint-disable-line no-await-in-loop
+      assert.strictEqual(ok, true, `body ${JSON.stringify(body)} should count as success`);
+    }
+  });
+
+  await tAsync('ack: 2xx but res.text() throws -> not ok (records retained)', async () => {
+    global.fetch = async () => ({
+      status: 200,
+      text: async () => { throw new Error('body read failed'); },
+    });
+    const { ok } = await postBatch('https://sink.example/ingest', 't', batch);
+    assert.strictEqual(ok, false, 'an unreadable 2xx body must be treated as not-acked');
+  });
+
+  global.fetch = realFetch;
+}
+
+runAsyncTests().then(() => {
+  console.log(`\n${ran - failed}/${ran} passed`);
+  process.exit(failed ? 1 : 0);
+});

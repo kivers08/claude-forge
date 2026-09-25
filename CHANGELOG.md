@@ -12,6 +12,9 @@
 - Telemetry flush rotates the buffer atomically (rename to a unique `.sending` sibling) before reading, so records appended by concurrent hooks during a flush are no longer lost; unsent records are appended back to the live buffer, never overwritten.
 - Telemetry flush groups buffered records by their own `session_id` and sends one batch per session, so a shared cross-session buffer no longer mixes sessions into a single batch.
 - Telemetry flush splits each session's records into size-bounded chunks (new `telemetry.maxBatchBytes` config, default 90000) so an oversized POST cannot be permanently rejected; a single record larger than the cap is dropped and noted via the telemetry log.
+- Telemetry flush groups records using the `session_id` value itself as the map key rather than a stringified synthetic key, so distinct ids that stringify alike (numeric `1` vs string `"1"`) no longer merge and a session_id whose `toString` is missing/non-callable can no longer throw and strand the rotated buffer.
+- Telemetry flush now retains a chunk when a 2xx response's body READ throws (previously treated as success and dropped): an unread body is not a confirmed acknowledgment, so the records are kept and retried. A 2xx with a successfully-read empty/non-JSON/missing-accepted body still counts as success.
+- Telemetry flush recovers orphaned `*.sending` snapshots on startup: if a prior flush was killed after rotating the buffer but before finishing, the stranded snapshot is appended back into the live buffer and re-processed instead of being lost forever. The emitter is best-effort with one documented accepted limitation — a tiny inode-level concurrent-write loss window at rotation (metadata-only, lossy-tolerant, at-least-once delivery; a lock protocol is intentionally out of scope).
 
 ## 0.2.0 — 2026-09-24
 

@@ -155,14 +155,23 @@ function parseItems(text) {
 }
 
 // Pure, exported, unit-testable. Group sendable items by their own session_id.
-// Items whose record has no session_id group under the `null` key. Returns an
-// array of { sessionId, items } preserving first-seen order.
+// Items whose record has no session_id group under a single null sentinel.
+// Returns an array of { sessionId, items } preserving first-seen order.
+//
+// The session_id VALUE itself is used as the Map key (Map keys may be of any
+// type). We never coerce an untrusted session_id to a string: string coercion
+// could (a) merge distinct ids that stringify alike — numeric 1 vs string "1" —
+// and (b) THROW on an object whose toString is missing/non-callable, which would
+// abort the whole flush and strand the rotated file. Using the raw value as the
+// key sidesteps both. null/undefined normalize to one shared sentinel so absent
+// ids group together. Grouping must never throw.
+const NULL_SESSION = Symbol('null-session');
 function groupBySession(items) {
   const order = [];
   const byKey = new Map();
   for (const it of items) {
     const sid = (it && it.rec && it.rec.session_id != null) ? it.rec.session_id : null;
-    const key = sid === null ? '\u0000null' : `s:${sid}`;
+    const key = sid === null ? NULL_SESSION : sid;
     if (!byKey.has(key)) {
       byKey.set(key, { sessionId: sid, items: [] });
       order.push(key);
@@ -240,11 +249,16 @@ async function postBatch(url, token, batch) {
     });
     const twoXx = res.status >= 200 && res.status < 300;
     if (!twoXx) return { ok: false };
-    let body = '';
+    let body;
     try {
       body = await res.text();
     } catch (e) {
-      body = ''; // unreadable body on a 2xx: treat as success
+      // A 2xx whose body READ throws is NOT a confirmed ack: we cannot tell
+      // whether the sink signalled {accepted:false}. Treat as not-acked so the
+      // chunk is retained and retried, rather than silently dropped. (A 2xx with
+      // a successfully-read empty/non-JSON/missing-accepted body still counts as
+      // success via isAcceptedBody — only a body-read error flips to not-ok.)
+      return { ok: false };
     }
     return { ok: isAcceptedBody(body) };
   } catch (e) {
@@ -271,10 +285,47 @@ async function main() {
   const dir = io.dataDir(process.argv);
   const file = path.join(dir, 'telemetry.jsonl');
 
+  // Recover orphaned snapshots from crashed prior runs. If a previous flush was
+  // killed after renaming telemetry.jsonl -> *.sending but before it finished,
+  // that snapshot is stranded forever. Before rotating, scan dataDir for any
+  // pre-existing *.sending file (excluding the one we are about to create — it
+  // does not exist yet, but we filter by our own pid/ts marker to be safe) and
+  // APPEND its contents back into the live buffer (never overwrite), then unlink
+  // it, so its records are processed in the rotation below. Best-effort: any
+  // per-file error is ignored (fail open); recovery must never throw.
+  const rotated = `${file}.${process.pid}.${Date.now()}.sending`;
+  try {
+    const base = path.basename(file); // telemetry.jsonl
+    const ownMarker = path.basename(rotated);
+    for (const name of fs.readdirSync(dir)) {
+      if (name === ownMarker) continue;
+      if (!name.startsWith(`${base}.`) || !name.endsWith('.sending')) continue;
+      const stale = path.join(dir, name);
+      try {
+        const contents = fs.readFileSync(stale, 'utf8');
+        if (contents) fs.appendFileSync(file, contents.endsWith('\n') ? contents : `${contents}\n`);
+        fs.unlinkSync(stale);
+      } catch (e) {
+        // ignore this file; keep going
+      }
+    }
+  } catch (e) {
+    // dataDir unreadable: skip recovery, proceed to rotation (fail open)
+  }
+
   // Atomic rotation: rename the live buffer out of the way so concurrent hooks
   // append to a fresh telemetry.jsonl while we process the rotated snapshot. If
   // the rename fails (buffer absent, or lost a race to another flush), no-op.
-  const rotated = `${file}.${process.pid}.${Date.now()}.sending`;
+  //
+  // ACCEPTED BEST-EFFORT LIMITATION (inode-level writer race): a concurrent hook
+  // can open telemetry.jsonl for append microseconds before this rename and then
+  // write to the old inode AFTER the rename, so those records land in the fresh
+  // live buffer's predecessor and are lost from this snapshot. Fully closing this
+  // window requires a lock protocol (e.g. flock/lockfile around every append and
+  // the rotate). That is deliberately out of scope: this telemetry is
+  // non-critical, metadata-only, lossy-tolerant, at-least-once delivery — a tiny
+  // concurrent-write loss window is acceptable, and a lock protocol would be
+  // over-engineering for it.
   try {
     fs.renameSync(file, rotated);
   } catch (e) {
@@ -346,11 +397,16 @@ async function main() {
   }
 }
 
-main()
-  .catch(() => {
-    // fail open: telemetry must never affect the session
-  })
-  .finally(() => process.exit(0));
+// Run only when invoked as a script (node telemetry-flush.js), not when this
+// module is require()d by the unit tests. Auto-running on require would call
+// process.exit(0) mid-test and kill any asynchronous test still in flight.
+if (require.main === module) {
+  main()
+    .catch(() => {
+      // fail open: telemetry must never affect the session
+    })
+    .finally(() => process.exit(0));
+}
 
 module.exports = {
   mapRecordsToBatch,
@@ -359,4 +415,5 @@ module.exports = {
   groupBySession,
   chunkSessionItems,
   isAcceptedBody,
+  postBatch,
 };
