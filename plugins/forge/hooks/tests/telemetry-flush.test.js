@@ -13,7 +13,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { mapRecordsToBatch, retainUnsentLines } = require('../telemetry-flush');
+const {
+  mapRecordsToBatch, retainUnsentLines, parseItems,
+  groupBySession, chunkSessionItems, isAcceptedBody,
+} = require('../telemetry-flush');
 
 const HOOK = path.join(__dirname, '..', 'telemetry-flush.js');
 
@@ -264,6 +267,139 @@ t('enabled but no sinkUrl: hook no-ops, buffer left intact', () => {
   });
   assert.strictEqual(r.status, 0, `exit ${r.status}; stderr: ${r.stderr}`);
   assert.strictEqual(after, original, 'buffer must survive when no sink is configured');
+});
+
+// ---- isAcceptedBody: honor a 2xx {accepted:false} rejection ----------------
+
+t('isAcceptedBody: 2xx with {accepted:false} is NOT success', () => {
+  assert.strictEqual(isAcceptedBody(JSON.stringify({ accepted: false })), false);
+  assert.strictEqual(isAcceptedBody('{"accepted":false,"reason":"backpressure"}'), false);
+});
+
+t('isAcceptedBody: empty / non-JSON / missing-field / accepted:true all count as success', () => {
+  assert.strictEqual(isAcceptedBody(''), true);
+  assert.strictEqual(isAcceptedBody('   '), true);
+  assert.strictEqual(isAcceptedBody(null), true);
+  assert.strictEqual(isAcceptedBody(undefined), true);
+  assert.strictEqual(isAcceptedBody('OK'), true); // non-JSON body
+  assert.strictEqual(isAcceptedBody('not json {'), true);
+  assert.strictEqual(isAcceptedBody(JSON.stringify({ status: 'ok' })), true); // no accepted field
+  assert.strictEqual(isAcceptedBody(JSON.stringify({ accepted: true })), true);
+  assert.strictEqual(isAcceptedBody(JSON.stringify({ accepted: 'no' })), true); // only strict false rejects
+  assert.strictEqual(isAcceptedBody('[1,2,3]'), true); // JSON but not an object with accepted:false
+});
+
+// ---- groupBySession: shared buffer split into one batch per session --------
+
+t('groupBySession: records from two sessions produce two groups keyed correctly', () => {
+  const items = parseItems([
+    JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 'A' }),
+    JSON.stringify({ event: 'unit_complete', agent_type: 'x', session_id: 'B' }),
+    JSON.stringify({ event: 'invocation', tool: 'Read', session_id: 'A' }),
+  ].join('\n') + '\n');
+  const groups = groupBySession(items);
+  assert.strictEqual(groups.length, 2);
+  const a = groups.find((g) => g.sessionId === 'A');
+  const b = groups.find((g) => g.sessionId === 'B');
+  assert.strictEqual(a.items.length, 2);
+  assert.strictEqual(b.items.length, 1);
+  // Each group builds a batch keyed to its own session_id.
+  const batchA = mapRecordsToBatch(a.items.map((it) => it.rec), 'pk', a.sessionId);
+  const batchB = mapRecordsToBatch(b.items.map((it) => it.rec), 'pk', b.sessionId);
+  assert.strictEqual(batchA.session_id, 'A');
+  assert.strictEqual(batchB.session_id, 'B');
+  assert.strictEqual(batchA.events.length, 2);
+  assert.strictEqual(batchB.events.length, 1);
+});
+
+t('groupBySession: records without a session_id fall under the null group', () => {
+  const items = parseItems([
+    JSON.stringify({ event: 'invocation', tool: 'Bash' }),
+    JSON.stringify({ event: 'invocation', tool: 'Read', session_id: null }),
+  ].join('\n') + '\n');
+  const groups = groupBySession(items);
+  assert.strictEqual(groups.length, 1);
+  assert.strictEqual(groups[0].sessionId, null);
+  assert.strictEqual(groups[0].items.length, 2);
+});
+
+// ---- chunkSessionItems: bounded request chunks -----------------------------
+
+t('chunkSessionItems: records over the cap split into multiple chunks, each under cap', () => {
+  // Build many records; pick a cap that forces several chunks.
+  const items = parseItems(Array.from({ length: 40 }, (_, i) =>
+    JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 's', n: i })).join('\n') + '\n');
+  const cap = 400;
+  const { chunks, oversized } = chunkSessionItems(items, cap, 'pk', 's');
+  assert.strictEqual(oversized.length, 0);
+  assert.ok(chunks.length > 1, `expected multiple chunks, got ${chunks.length}`);
+  // Every chunk's serialized batch stays at/under the cap.
+  for (const chunk of chunks) {
+    const bytes = Buffer.byteLength(JSON.stringify(
+      mapRecordsToBatch(chunk.map((x) => x.rec), 'pk', 's')), 'utf8');
+    assert.ok(bytes <= cap, `chunk of ${chunk.length} is ${bytes} bytes > cap ${cap}`);
+  }
+  // No record is lost or duplicated across chunks.
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  assert.strictEqual(total, items.length);
+});
+
+t('chunkSessionItems: a single oversized record is set aside, not stranded in a chunk', () => {
+  const items = parseItems([
+    JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 's' }),
+    JSON.stringify({ event: 'invocation', tool: 'x'.repeat(5000), session_id: 's' }),
+    JSON.stringify({ event: 'invocation', tool: 'Read', session_id: 's' }),
+  ].join('\n') + '\n');
+  const cap = 300;
+  const { chunks, oversized } = chunkSessionItems(items, cap, 'pk', 's');
+  assert.strictEqual(oversized.length, 1, 'the huge record is oversized');
+  // The two normal records still get chunked and are sendable.
+  const sent = chunks.reduce((n, c) => n + c.length, 0);
+  assert.strictEqual(sent, 2);
+  for (const chunk of chunks) {
+    const bytes = Buffer.byteLength(JSON.stringify(
+      mapRecordsToBatch(chunk.map((x) => x.rec), 'pk', 's')), 'utf8');
+    assert.ok(bytes <= cap);
+  }
+});
+
+t('chunkSessionItems: an unset/invalid cap falls back to the generic default', () => {
+  const items = parseItems(JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 's' }) + '\n');
+  // Default (90000) easily fits one small record in one chunk.
+  for (const bad of [undefined, null, 0, -5, 1.5, 'big']) {
+    const { chunks, oversized } = chunkSessionItems(items, bad, 'pk', 's');
+    assert.strictEqual(oversized.length, 0);
+    assert.strictEqual(chunks.length, 1);
+    assert.strictEqual(chunks[0].length, 1);
+  }
+});
+
+// ---- retain-on-failure: a failed chunk's records are preserved -------------
+
+// Mirrors main()'s retain composition: non-sent records are always retained,
+// plus every item in a chunk whose POST did not succeed. Proves the verbatim
+// lines that would be appended back to the live buffer.
+t('retain-on-failure: failed chunk records + non-sent records are kept verbatim, sent-ok dropped', () => {
+  const nonSent = JSON.stringify({ event: 'session_start', session_id: 'A' });
+  const failLine = JSON.stringify({ event: 'invocation', tool: 'Bash', session_id: 'A' });
+  const okLine = JSON.stringify({ event: 'unit_complete', agent_type: 'x', session_id: 'B' });
+  const items = parseItems([nonSent, failLine, okLine].join('\n') + '\n');
+
+  const retain = new Set();
+  for (const it of items) {
+    const sent = it.rec && (it.rec.event === 'invocation' || it.rec.event === 'unit_complete');
+    if (!sent) retain.add(it); // non-sent always kept
+  }
+  // Simulate: session A's chunk POST failed, session B's succeeded.
+  for (const g of groupBySession(items.filter((it) =>
+    it.rec && (it.rec.event === 'invocation' || it.rec.event === 'unit_complete')))) {
+    const failed = g.sessionId === 'A';
+    const { chunks } = chunkSessionItems(g.items, 90000, 'pk', g.sessionId);
+    if (failed) for (const c of chunks) for (const it of c) retain.add(it);
+  }
+  const kept = items.filter((it) => retain.has(it)).map((it) => it.raw);
+  assert.deepStrictEqual(kept, [nonSent, failLine]);
+  assert.ok(!kept.includes(okLine), 'a successfully sent record must not be retained');
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);

@@ -427,6 +427,11 @@
           "type": "string",
           "description": "NAME of the environment variable holding the per-repo ingest token. The token itself is never stored in config."
         },
+        "maxBatchBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum serialized size (bytes) of a single POST body. The flush hook splits each session's records into chunks whose JSON stays under this cap so one oversized POST cannot be permanently rejected (e.g. HTTP 413). Generic; forge ships no consumer-specific limit and defaults to 90000 when unset. A single record whose own batch exceeds the cap is dropped to avoid permanent stranding."
+        },
         "mode": {
           "type": "string",
           "enum": ["metadata-only"],
