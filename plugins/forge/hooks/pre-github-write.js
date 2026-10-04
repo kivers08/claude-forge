@@ -41,6 +41,16 @@ function main() {
     return;
   }
 
+  // Auto-merge on a CHILD PR: the later merge happens with no hook watching,
+  // so the child test rule must hold NOW (passing checks), or no auto-merge.
+  if (/enable_pr_auto_merge$/.test(tool) && targetBranch && targetBranch !== base) {
+    const v = mc.childVerdict({ config, projectDir, payload }, Number.isFinite(pr) ? pr : undefined, slug, `auto-merge on PR #${Number.isFinite(pr) ? pr : '?'}`);
+    if (!v) return;
+    io.telemetry(dataDir, { event: v.ask ? 'guard_ask' : 'guard_deny', guard: 'merge-gate', tool, session_id: payload.session_id || null });
+    if (v.ask) io.ask(v.ask, 'PreToolUse'); else io.deny(v.deny, 'PreToolUse');
+    return;
+  }
+
   // Direct writes have no PR to bind a spoken marker to (pr stays unset);
   // auto-merge and re-pointing do.
   const bound = /enable_pr_auto_merge$|update_pull_request$/.test(tool) && Number.isFinite(pr) ? pr : undefined;

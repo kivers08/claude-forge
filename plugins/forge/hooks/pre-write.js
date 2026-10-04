@@ -13,7 +13,7 @@ function main() {
   const file = input.file_path || input.notebook_path || input.path;
   if (!file) return;
 
-  if (/claude-human-merge-ok|merge-ok\.json/.test(String(file))) {
+  if (/claude-human-merge-ok|merge-ok\.json/i.test(String(file))) {
     io.telemetry(dataDir, { event: 'guard_deny', guard: 'marker-write', tool: payload.tool_name || null, session_id: payload.session_id || null, file });
     io.deny('forge marker-write guard: the merge marker records the HUMAN\'s decision and may not be created or edited by the agent.', 'PreToolUse');
     return;

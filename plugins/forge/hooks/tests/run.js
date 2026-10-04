@@ -15,6 +15,7 @@
 //     "permissionMode": "default",            optional: fills {{MODE}} (default "auto", where a merge ask never fires)
 //     "spokenMarker": {"pr": 7},              optional: writes the spoken marker into the plugin data dir
 //     "spokenMarkerMinutes": 1,               optional: its age (default 1)
+//     "origin": "owner/repo",                 optional: origin of the fixture repo (default kivers08/claude-forge)
 //     "nestedRepo": "owner/repo",             optional: fixture is a PARENT folder holding one git repo (origin owner/repo); markers go in the repo
 //     "prompt": "merge",                      optional: fills {{PROMPT}} (UserPromptSubmit payloads)
 //     "toolName"/"toolInput": ...             optional: fill {{TOOL_NAME}} / {{TOOL_INPUT}} (GitHub-tool payloads)
@@ -62,7 +63,9 @@ function makeFixture(c, n) {
   if (c.nestedRepo) fs.mkdirSync(repo, { recursive: true });
   if (c.git) {
     git(repo, ['init', '-q', '-b', 'main']);
-    if (c.nestedRepo) git(repo, ['remote', 'add', 'origin', `https://github.com/${c.nestedRepo}.git`]);
+    // Every git fixture has an origin (default kivers08/claude-forge, the
+    // slug the GitHub-tool payloads name) so repository binding is exercised.
+    git(repo, ['remote', 'add', 'origin', `https://github.com/${c.nestedRepo || c.origin || 'kivers08/claude-forge'}.git`]);
     git(repo, ['config', 'user.email', 'test@example.invalid']);
     git(repo, ['config', 'user.name', 'forge tests']);
     fs.writeFileSync(path.join(repo, '.gitkeep'), '');

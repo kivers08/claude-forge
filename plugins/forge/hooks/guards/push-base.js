@@ -39,16 +39,18 @@ module.exports = {
     const found = subcommandAfter(ctx.tokens, 'git', GIT_FLAGS_WITH_VALUE);
     if (!found || found.sub !== 'push') return null;
     const base = get(ctx.config, 'git.baseBranch', 'main');
+    // `git -C <dir> push`: judge the branch and the marker in THAT repository.
+    const workDir = mc.gitWorkDir(ctx.tokens, ctx.projectDir);
     const rest = ctx.tokens.slice(found.index + 1).filter((t) => !t.quoted).map((t) => t.value);
     // `HEAD` means "the current branch", so resolve it before comparing.
-    const dests = destinationsOf(rest).map((d) => (d === 'HEAD' ? currentBranch(ctx.projectDir) || d : d));
+    const dests = destinationsOf(rest).map((d) => (d === 'HEAD' ? currentBranch(workDir) || d : d));
 
     let hitsBase = dests.includes(base);
     if (!hitsBase && dests.length === 0) {
       // Bare `git push` / `git push origin`: goes where the current branch goes.
-      hitsBase = currentBranch(ctx.projectDir) === base;
+      hitsBase = currentBranch(workDir) === base;
     }
     if (!hitsBase) return null;
-    return mc.gate(ctx, { what: `\`git push\` to ${base}` });
+    return mc.gate({ ...ctx, projectDir: workDir }, { what: `\`git push\` to ${base}` });
   },
 };

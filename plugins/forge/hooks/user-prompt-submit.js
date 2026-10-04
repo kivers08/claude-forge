@@ -44,8 +44,11 @@ function main() {
   const hit = parse(prompt);
   if (!hit) return;
   const file = path.join(dataDir, mc.SPOKEN);
+  // PR numbers are per repository: record which repositories the session
+  // can see; the guard honours the marker only when that is exactly one and
+  // it is the merge's target.
   fs.writeFileSync(file, JSON.stringify({
-    pr: hit.pr, text: hit.text, session_id: payload.session_id || null, ts: new Date().toISOString(),
+    pr: hit.pr, repos: mc.sessionRepoSlugs(projectDir), text: hit.text, session_id: payload.session_id || null, ts: new Date().toISOString(),
   }));
   io.telemetry(dataDir, { event: 'merge_word', pr: hit.pr, session_id: payload.session_id || null });
 }

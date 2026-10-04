@@ -75,7 +75,12 @@ function originSlug(repoDir) {
 // the caller fails safe.
 function findRepoDir(cwd, slug) {
   const top = gitTop(cwd);
-  if (top) return top;
+  if (top) {
+    // A request naming another repository must not use THIS repository's
+    // marker: fail closed when the current repo's origin is not the target.
+    if (slug && originSlug(top) !== String(slug).toLowerCase()) return null;
+    return top;
+  }
   if (!cwd || !slug || !isDir(cwd)) return null;
   const want = String(slug).toLowerCase();
   let hits = [];
@@ -88,6 +93,49 @@ function findRepoDir(cwd, slug) {
     return null;
   }
   return hits.length === 1 ? hits[0] : null;
+}
+
+// The directory a `git` command really runs in: `git -C <dir> ...` (repeatable,
+// each relative to the previous) moves it away from the project directory.
+function gitWorkDir(tokens, projectDir) {
+  let dir = projectDir || null;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].quoted || tokens[i].value.toLowerCase() !== 'git') continue;
+    for (let j = i + 1; j < tokens.length; j++) {
+      const v = tokens[j].value;
+      if (v === '-C' && j + 1 < tokens.length) {
+        const next = tokens[j + 1].value;
+        dir = path.isAbsolute(next) ? next : path.resolve(dir || '.', next);
+        j += 1;
+        continue;
+      }
+      if (!v.startsWith('-')) break;
+      if (/^-(c|-git-dir|-work-tree|-namespace|-exec-path)$/.test(v)) j += 1;
+    }
+    break;
+  }
+  return dir;
+}
+
+// Every repository the session can see: the working directory's repo, or
+// in a multi-repo session the immediate child repos. Used to bind a spoken
+// marker to a repository.
+function sessionRepoSlugs(cwd) {
+  const top = gitTop(cwd);
+  if (top) return [originSlug(top)].filter(Boolean);
+  const out = [];
+  try {
+    for (const name of fs.readdirSync(cwd)) {
+      const dir = path.join(cwd, name);
+      if (isDir(path.join(dir, '.git'))) {
+        const sl = originSlug(dir);
+        if (sl) out.push(sl);
+      }
+    }
+  } catch (e) {
+    return [];
+  }
+  return out;
 }
 
 // Open pull requests whose destination is `base`, via `gh`. null = could not
@@ -140,36 +188,49 @@ function markerState(opts) {
     const m = readJson(file);
     const age = ageMs(file);
     if (m && age !== null && age <= MAX_AGE_MS) {
-      const bound = Number.isFinite(Number(m.pr)) && m.pr !== null ? Number(m.pr) : null;
-      if (o.pr !== undefined && o.pr !== null) {
-        if (bound !== null) {
-          if (bound === Number(o.pr)) return { ok: true, file, source: 'spoken' };
-          reasons.push(`the spoken merge was for PR ${bound}, not PR ${o.pr}`);
-        } else {
-          // "merge" with no number: applies only to the one open PR into base.
-          const open = openPrsInto(o.repoDir, o.base || 'main', o.slug);
-          if (open && open.length === 1 && open[0] === Number(o.pr)) return { ok: true, file, source: 'spoken' };
-          if (open && open.length > 1) reasons.push(`"merge" was said but ${open.length} pull requests are open into ${o.base || 'main'}; ask which one`);
-          else reasons.push('"merge" was said but the single open pull request could not be confirmed; ask for the PR number');
-        }
-      } else if (bound === null) {
-        return { ok: true, file, source: 'spoken' };
+      const bound = m.pr !== null && m.pr !== undefined && Number.isFinite(Number(m.pr)) ? Number(m.pr) : null;
+      const repos = Array.isArray(m.repos) ? m.repos.map((r) => String(r).toLowerCase()) : [];
+      const target = o.slug ? String(o.slug).toLowerCase() : (o.repoDir ? originSlug(o.repoDir) : null);
+      if (o.pr === undefined || o.pr === null || !Number.isFinite(Number(o.pr))) {
+        // A spoken merge authorises a PULL REQUEST merge only, never a direct
+        // write (push, file tools, raw API) or a merge whose PR number is unknown.
+        reasons.push('a spoken "merge" applies only to a pull request merge with a known PR number');
+      } else if (repos.length !== 1 || !target || repos[0] !== target) {
+        // PR numbers are per repository: the marker must name exactly this one.
+        reasons.push('the spoken "merge" could not be tied to this repository (say it in a session with only this repository, or approve the prompt)');
+      } else if (bound !== null) {
+        if (bound === Number(o.pr)) return { ok: true, file, source: 'spoken' };
+        reasons.push(`the spoken merge was for PR ${bound}, not PR ${o.pr}`);
       } else {
-        reasons.push(`the spoken merge was bound to PR ${bound}, not to this direct write`);
+        // "merge" with no number: applies only to the one open PR into base.
+        const open = openPrsInto(o.repoDir, o.base || 'main', o.slug);
+        if (open && open.length === 1 && open[0] === Number(o.pr)) return { ok: true, file, source: 'spoken' };
+        if (open && open.length > 1) reasons.push(`"merge" was said but ${open.length} pull requests are open into ${o.base || 'main'}; ask which one`);
+        else reasons.push('"merge" was said but the single open pull request could not be confirmed; ask for the PR number');
       }
     }
   }
   return { ok: false, why: reasons.join('; ') || `no ${MARKER} marker` };
 }
 
-function consume(state) {
-  if (state && state.ok && state.file) {
-    try {
-      fs.unlinkSync(state.file);
-    } catch (e) {
-      // best effort
-    }
+// Claim a single-use marker atomically: rename it to a unique name (only one
+// caller can win a rename of the same file), then delete the claimed copy.
+// Returns false when the claim fails (already used by a concurrent call, or
+// not removable), and the caller must then refuse.
+function claim(state) {
+  if (!state || !state.ok || !state.file) return false;
+  const claimed = `${state.file}.claimed-${process.pid}-${Date.now()}`;
+  try {
+    fs.renameSync(state.file, claimed);
+  } catch (e) {
+    return false;
   }
+  try {
+    fs.unlinkSync(claimed);
+  } catch (e) {
+    // the live marker is already gone; a leftover claimed file is inert
+  }
+  return true;
 }
 
 // True when an "ask" verdict may stand in for a deny.
@@ -215,7 +276,9 @@ function gate(ctx, o) {
         + '.claude/forge.json if that policy has genuinely changed).',
     };
   }
-  consume(state);
+  if (!claim(state)) {
+    return { deny: 'forge merge-gate guard: the merge marker was already used (it is single-use) or could not be claimed. Ask the human again.' };
+  }
   return null;
 }
 
@@ -243,7 +306,26 @@ function childChecks(repoDir, pr, slug) {
   return { ok: true, count: rows.length };
 }
 
+// Verdict for a merge INTO A NON-BASE branch (child into parent): passing
+// checks or nothing; a failure never becomes an ask; an unknown result asks
+// where an ask reaches the human, else denies.
+function childVerdict(ctx, pr, slug, what) {
+  if (get(ctx.config, 'merge.requireChildTests', true) !== true) return null;
+  const repoDir = findRepoDir(ctx.projectDir, slug);
+  const r = childChecks(repoDir, pr, slug);
+  if (r.ok) return null;
+  const label = what || `PR #${pr || '?'}`;
+  if (r.kind === 'unknown' && mayAsk(ctx.config, ctx.payload)) {
+    return { ask: `forge merge-gate: ${label} has no usable test result (${r.why}). Approve only if you accept merging it untested.` };
+  }
+  return {
+    deny: `forge merge-gate guard: ${label} cannot merge into its parent branch because ${r.why}. `
+      + 'Read the results with the digest script (plugins/forge/scripts/digest/digest.js ci), fix them, '
+      + 'then merge. Put the digest summary line in the merge commit message.',
+  };
+}
+
 module.exports = {
   MARKER, SPOKEN, MAX_AGE_MS,
-  findRepoDir, markerState, consume, mayAsk, noMarkerVerdict, gate, childChecks, openPrsInto,
+  findRepoDir, gitWorkDir, sessionRepoSlugs, markerState, claim, mayAsk, noMarkerVerdict, gate, childChecks, childVerdict, openPrsInto,
 };

@@ -45,6 +45,23 @@ function resolvePrBaseBranch(cwd, identifier, slug) {
   return branch || null;
 }
 
+// The PR's number via `gh pr view` when the merge named it by branch or
+// URL (or not at all). null when it cannot be resolved.
+function resolvePrNumber(cwd, identifier) {
+  if (identifier && /^\d+$/.test(String(identifier))) return Number(identifier);
+  const args = ['pr', 'view'];
+  if (identifier) args.push(String(identifier));
+  args.push('--json', 'number', '-q', '.number');
+  let r;
+  try {
+    r = spawnSync('gh', args, { cwd: cwd || undefined, encoding: 'utf8' });
+  } catch (e) {
+    return null;
+  }
+  const n = r && r.status === 0 ? Number(String(r.stdout).trim()) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
 function currentBranch(cwd) {
   if (!cwd) return null;
   const r = spawnSync('git', ['branch', '--show-current'], { cwd, encoding: 'utf8' });
@@ -72,6 +89,7 @@ function ghMergeIdentifier(tokens) {
 module.exports = {
   name: 'merge-gate',
   resolvePrBaseBranch,
+  resolvePrNumber,
   // Also called directly by pre-merge-mcp.js for mcp__github__merge_pull_request.
   checkMerge(ctx, opts) {
     const o = opts || {};
@@ -90,10 +108,10 @@ module.exports = {
     if (isGhMerge) {
       const identifier = ghMergeIdentifier(ctx.tokens);
       const targetBranch = resolvePrBaseBranch(ctx.projectDir, identifier);
-      const num = Number(identifier);
+      const num = resolvePrNumber(ctx.projectDir, identifier);
       return module.exports.checkMerge(ctx, {
         what: '`gh pr merge`',
-        pr: Number.isFinite(num) && /^\d+$/.test(String(identifier)) ? num : undefined,
+        pr: num === null ? undefined : num,
         requireSquash: true,
         isSquash: words.includes('--squash'),
         targetBranch,
@@ -102,10 +120,11 @@ module.exports = {
 
     // Local git merge: only gated on the base branch itself.
     const base = get(ctx.config, 'git.baseBranch', 'main');
-    const branch = currentBranch(ctx.projectDir);
+    const workDir = mc.gitWorkDir(ctx.tokens, ctx.projectDir);
+    const branch = currentBranch(workDir);
     if (branch === null) return null; // fail open: detached HEAD or no git
     if (branch !== base) return null;
-    return module.exports.checkMerge(ctx, {
+    return module.exports.checkMerge({ ...ctx, projectDir: workDir }, {
       what: `a \`git merge\` while ${base} is checked out`,
       requireSquash: true,
       isSquash: words.includes('--squash'),

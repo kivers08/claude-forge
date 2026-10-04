@@ -43,7 +43,9 @@ A human decision is one of:
 2. a spoken "merge" (only when the project sets `merge.spokenWord`; the whole
    message must be a merge command such as "merge", "merge to main" or
    "merge PR 12"; a bare "merge" applies only to the single open pull request
-   into the base branch, and with two or more the agent asks which), or
+   into the base branch, and with two or more the agent asks which; it only
+   ever authorizes a pull request merge, never a direct write, and only in a
+   session tied to exactly that one repository), or
 3. a one-tap approval, shown instead of a denial when the session's
    permission mode is one where an approval reaches the human (`default`,
    `acceptEdits`, `plan`; `auto` only if `merge.askInAutoMode` is set).

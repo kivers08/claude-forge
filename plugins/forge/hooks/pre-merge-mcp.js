@@ -43,7 +43,7 @@ function main() {
 
   let verdict;
   if (targetBranch && targetBranch !== base) {
-    verdict = childVerdict({ config, projectDir, payload }, pullNumber, slug);
+    verdict = mc.childVerdict({ config, projectDir, payload }, pullNumber, slug);
   } else {
     verdict = guard.checkMerge({ config, projectDir, payload, dataDir }, {
       what: `merging PR #${pullNumber || '?'} through the GitHub MCP server`,
@@ -58,21 +58,6 @@ function main() {
   }
   if (!verdict) return;
   emit(verdict, payload, dataDir);
-}
-
-function childVerdict(ctx, pullNumber, slug) {
-  if (cfg.get(ctx.config, 'merge.requireChildTests', true) !== true) return null;
-  const repoDir = mc.findRepoDir(ctx.projectDir, slug);
-  const r = mc.childChecks(repoDir, pullNumber, slug);
-  if (r.ok) return null;
-  const hint = 'Read the results with the digest script (plugins/forge/scripts/digest/digest.js ci), fix them, '
-    + 'then merge. Put the digest summary line in the merge commit message.';
-  if (r.kind === 'unknown' && mc.mayAsk(ctx.config, ctx.payload)) {
-    return { ask: `forge merge-gate: PR #${pullNumber || '?'} has no usable test result (${r.why}). Approve only if you accept merging it untested.` };
-  }
-  return {
-    deny: `forge merge-gate guard: PR #${pullNumber || '?'} cannot merge into its parent branch because ${r.why}. ${hint}`,
-  };
 }
 
 function emit(verdict, payload, dataDir) {

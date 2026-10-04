@@ -2,6 +2,7 @@
 'use strict';
 // Fake `gh` for hook tests. Understands only what the merge-control code calls:
 //   gh pr view [<id>] --json baseRefName -q .baseRefName   prints $FAKE_GH_BASE_REF (default "main")
+//   gh pr view [<id>] --json number -q .number            prints $FAKE_GH_PR_NUMBER (default "7")
 //   gh pr list ... -q .[].number    prints $FAKE_GH_OPEN_PRS (comma list, default "7"), one per line
 //   gh pr checks N --json name,bucket   prints a JSON array steered by
 //     $FAKE_GH_CHECKS = pass (default) | fail | pending | none | unreadable
@@ -10,6 +11,10 @@
 // these see the same behavior as before the merge-control work.
 const args = process.argv.slice(2);
 if (process.env.FAKE_GH_FAIL) process.exit(1);
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('number')) {
+  process.stdout.write((process.env.FAKE_GH_PR_NUMBER || '7') + '\n');
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'view') {
   process.stdout.write((process.env.FAKE_GH_BASE_REF || 'main') + '\n');
   process.exit(0);
