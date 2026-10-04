@@ -2,10 +2,13 @@
 // Fallback for runners without an adapter. Always low-confidence: exit code plus a few
 // matching lines; never claims counts.
 
-const { stripAnsi, oneLine, tailOf } = require('../common');
+const { stripAnsi, oneLine, tailOf, couldNotParse } = require('../common');
 
 function parse(text, exitCode) {
   const clean = stripAnsi(text);
+  if (exitCode === undefined || exitCode === null || Number.isNaN(exitCode)) {
+    return couldNotParse('TESTS', clean, 'no exit code given and no runner adapter: cannot tell pass from fail');
+  }
   if (exitCode === 0) {
     return { kind: 'TESTS', status: 'PASS', summary: 'exit code 0 (generic adapter: no counts available)', failures: [] };
   }

@@ -11,6 +11,7 @@ function parse(text, exitCode) {
     if (m) files.push(m[1]);
   }
   if (exitCode === 0 && files.length === 0) return { kind: 'FORMAT', status: 'PASS', summary: 'all files formatted', failures: [] };
+  if (exitCode === 0 && files.length > 0) return couldNotParse('FORMAT', clean, 'exit code 0 but output lists unformatted files');
   if (files.length === 0) return couldNotParse('FORMAT', clean, 'no "[warn] <file>" lines found');
   return {
     kind: 'FORMAT',

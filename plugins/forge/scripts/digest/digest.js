@@ -11,16 +11,8 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
-const { render, couldNotParse, stripAnsi } = require('./common');
+const { render, couldNotParse, detectRunner } = require('./common');
 const { ADAPTERS, digestRun } = require('./ci');
-
-function detectRunner(text) {
-  const t = stripAnsi(text);
-  if (/^Tests:\s/m.test(t) && /^Test Suites:\s/m.test(t)) return 'jest';
-  if (/^\[warn\]\s/m.test(t) || /Checking formatting/.test(t)) return 'prettier';
-  if (/✖ \d+ problems?/.test(t) || /^\s+\d+:\d+\s+(error|warning)\s/m.test(t)) return 'eslint';
-  return 'generic';
-}
 
 function digestText(text, exitCode, runner) {
   const name = runner || detectRunner(text);

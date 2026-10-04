@@ -13,14 +13,17 @@ function parse(text, exitCode) {
       file = l.trim();
       continue;
     }
-    const m = /^\s+(\d+):(\d+)\s+(error|warning)\s+(.+?)\s{2,}(\S+)\s*$/.exec(l);
-    if (m && file) failures.push({ where: `${file}:${m[1]}`, name: m[5], error: oneLine(`${m[3]}: ${m[4]}`) });
+    // The rule ID is optional: ESLint omits it for diagnostics such as "Parsing error".
+    const m = /^\s+(\d+):(\d+)\s+(error|warning)\s+(.+?)(?:\s{2,}(\S+))?\s*$/.exec(l);
+    if (m && file) failures.push({ where: `${file}:${m[1]}`, name: m[5] || null, error: oneLine(`${m[3]}: ${m[4]}`) });
   }
   const sum = /✖ (\d+) problems? \((\d+) errors?, (\d+) warnings?\)/.exec(clean);
   if (exitCode === 0 && failures.length === 0) return { kind: 'LINT', status: 'PASS', summary: '0 problems', failures: [] };
   if (!sum && failures.length === 0) return couldNotParse('LINT', clean, 'no ESLint problem lines or summary found');
-  const errors = sum ? Number(sum[2]) : failures.length;
+  const errors = sum ? Number(sum[2]) : failures.filter((f) => f.error.startsWith('error')).length;
   const warnings = sum ? Number(sum[3]) : 0;
+  if (sum && failures.length === 0) return couldNotParse('LINT', clean, 'summary reports problems but no problem lines were parsed');
+  if (exitCode === 0 && errors > 0) return couldNotParse('LINT', clean, 'exit code 0 but output reports errors');
   const status = errors > 0 || (exitCode !== undefined && exitCode !== 0) ? 'FAIL' : 'PASS';
   return { kind: 'LINT', status, summary: `${errors} errors, ${warnings} warnings`, failures };
 }

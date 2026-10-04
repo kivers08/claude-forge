@@ -4,6 +4,7 @@
 const MAX_FAILURES = 10;
 const MAX_ERROR_CHARS = 200;
 const TAIL_LINES = 20;
+const MAX_TAIL_LINE_CHARS = 200;
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -20,7 +21,7 @@ function oneLine(s) {
 function tailOf(text, n = TAIL_LINES) {
   const lines = stripAnsi(text).split('\n');
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-  return lines.slice(-n);
+  return lines.slice(-n).map((l) => (l.length > MAX_TAIL_LINE_CHARS ? l.slice(0, MAX_TAIL_LINE_CHARS - 3) + '...' : l));
 }
 
 // result: { kind, status: PASS|FAIL|COULD NOT PARSE, summary, failures: [{where, name, error}],
@@ -60,4 +61,13 @@ function couldNotParse(kind, text, why, extra = {}) {
   };
 }
 
-module.exports = { MAX_FAILURES, stripAnsi, oneLine, tailOf, render, couldNotParse };
+// Pick an adapter from the output itself, never from a script name like `npm test`.
+function detectRunner(text) {
+  const t = stripAnsi(text);
+  if (/^Tests:\s/m.test(t) && /^Test Suites:\s/m.test(t)) return 'jest';
+  if (/^\[warn\]\s/m.test(t) || /Checking formatting/.test(t)) return 'prettier';
+  if (/✖ \d+ problems?/.test(t) || /^\s+\d+:\d+\s+(error|warning)\s/m.test(t)) return 'eslint';
+  return 'generic';
+}
+
+module.exports = { MAX_FAILURES, stripAnsi, oneLine, tailOf, render, couldNotParse, detectRunner };

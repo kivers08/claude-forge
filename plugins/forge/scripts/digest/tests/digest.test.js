@@ -141,4 +141,51 @@ t('CLI ci: missing gh is reported plainly, exit 2', () => {
   assert.match(r.stderr, /gh. CLI is not installed/);
 });
 
+t('review fix: no exit code and no adapter is COULD NOT PARSE, not a false failure', () => {
+  const r = digestText('some output\n', undefined, 'generic');
+  assert.strictEqual(r.status, 'COULD NOT PARSE');
+  assert.ok(!/undefined/.test(render(r)));
+  const viaCli = spawnSync(process.execPath, [CLI, 'parse', '--runner', 'generic'], { encoding: 'utf8', input: 'some output\n' });
+  assert.strictEqual(viaCli.status, 2);
+});
+
+t('review fix: eslint diagnostics without a rule ID are kept (name null)', () => {
+  const text = '\n/app/bad.js\n  3:7  error  Parsing error: Unexpected token }\n\n✖ 1 problem (1 error, 0 warnings)\n';
+  const r = digestText(text, 1, 'eslint');
+  assert.strictEqual(r.status, 'FAIL');
+  assert.strictEqual(r.failures.length, 1);
+  assert.strictEqual(r.failures[0].name, null);
+  assert.match(r.failures[0].error, /Parsing error/);
+  assert.match(render(r), /\/app\/bad\.js:3\n    error: Parsing error/);
+});
+
+t('review fix: eslint/prettier contradictions with the exit code are COULD NOT PARSE', () => {
+  assert.strictEqual(digestText(fx('eslint-fail.txt'), 0, 'eslint').status, 'COULD NOT PARSE');
+  assert.strictEqual(digestText(fx('prettier-fail.txt'), 0, 'prettier').status, 'COULD NOT PARSE');
+  // ESLint exits 0 with warnings only; that is a pass, not a contradiction.
+  const warnOnly = '\n/app/w.js\n  1:1  warning  Unexpected console  no-console\n\n✖ 1 problem (0 errors, 1 warning)\n';
+  assert.strictEqual(digestText(warnOnly, 0, 'eslint').status, 'PASS');
+});
+
+t('review fix: a single huge line cannot blow up COULD NOT PARSE output', () => {
+  const huge = 'x'.repeat(2000000);
+  const out = render(digestText(`${huge}\n`, 1, 'jest'));
+  assert.ok(out.length < 5000, `output was ${out.length} chars`);
+});
+
+t('review fix: CI picks the adapter from output, not from `npm test` / `npm run lint`', () => {
+  const log = [
+    '##[group]Run npm test', '> vitest run', ' FAIL  src/a.test.ts > adds', 'AssertionError: nope',
+    '##[error]Process completed with exit code 1.',
+  ].join('\n');
+  const d = digestJobLog(log);
+  assert.strictEqual(d.runner, 'generic'); // Vitest output is not Jest; do not force the Jest adapter
+  assert.strictEqual(d.result.status, 'FAIL');
+  const eslintLog = [
+    '##[group]Run npm run lint', '', '/app/x.js', '  1:1  error  Bad  no-undef', '', '✖ 1 problem (1 error, 0 warnings)',
+    '##[error]Process completed with exit code 1.',
+  ].join('\n');
+  assert.strictEqual(digestJobLog(eslintLog).runner, 'eslint');
+});
+
 console.log(`${n} passed`);

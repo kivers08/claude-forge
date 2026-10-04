@@ -3,7 +3,7 @@
 // step, and hand that step's text to the matching adapter. No app CI file changes.
 
 const { spawnSync } = require('child_process');
-const { stripAnsi, oneLine, tailOf, couldNotParse } = require('./common');
+const { stripAnsi, oneLine, tailOf, couldNotParse, detectRunner } = require('./common');
 const ADAPTERS = {
   jest: require('./adapters/jest'),
   eslint: require('./adapters/eslint'),
@@ -42,12 +42,14 @@ function splitSteps(raw) {
   return steps;
 }
 
-function pickAdapter(command) {
+// Trust only an explicit tool name in the command; `npm test` or `npm run lint` could run any
+// tool, so otherwise read the step's own output.
+function pickAdapter(command, text) {
   const c = command.toLowerCase();
-  if (/\beslint\b|\blint\b/.test(c)) return 'eslint';
-  if (/prettier|\bformat/.test(c)) return 'prettier';
-  if (/\bjest\b|\btest\b/.test(c)) return 'jest';
-  return 'generic';
+  if (/jest/.test(c)) return 'jest';
+  if (/eslint/.test(c)) return 'eslint';
+  if (/prettier/.test(c)) return 'prettier';
+  return detectRunner(text);
 }
 
 // Digest the failed step of one job log. Returns { step, result } or a COULD NOT PARSE result.
@@ -60,7 +62,7 @@ function digestJobLog(raw) {
   const step = steps[idx];
   const code = Number(/exit code (\d+)/.exec(step.lines.find((l) => /^##\[error\]Process completed/.test(l)))[1]);
   const text = step.lines.filter((l) => !/^##\[(error|endgroup|group)\]/.test(l)).join('\n');
-  const runner = pickAdapter(step.command);
+  const runner = pickAdapter(step.command, text);
   return { step, runner, code, result: ADAPTERS[runner].parse(text, code) };
 }
 
