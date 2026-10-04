@@ -204,6 +204,8 @@ definition default. Same order for the review model with
 `agents.reviewer.model` in the third slot.
 
 ### D19 — Merge by tier
+> **SUPERSEDED in part by D32 (2026-10-04): the T0 auto-merge exception is removed.** The text below is kept as the record.
+
 T0 PRs use GitHub auto-merge once required checks are green, with a
 notification to the owner. T1–T3 keep the explicit human "merge" plus the
 merge-gate hook. The bootstrap-written CLAUDE.md framework block must state
@@ -799,3 +801,12 @@ never in committed config. The owner-only-deploy guardrail — Claude never
 triggers deploys or any xCloud write operation (sites, servers, cron, SSL,
 supervisor, SSH-based deploy) — is carried in the framework block, not here;
 reading xCloud state for diagnostics is the only sanctioned use.
+
+### D32 — Merge control: no auto-merge, spoken word or one-tap approval, tests before child merges
+**Decided 2026-10-04 (owner, via the opusjevos platform brainstorm D-I, D-J, D-K, D-P, D-AO..D-AR, D-AT, D-AU).**
+1. **T0 auto-merge is removed** (supersedes D19's exception). No tier merges to the base branch without a human decision. Tiers (D17) keep setting review depth.
+2. **One decision module** (`hooks/lib/merge-control.js`) covers every route onto the base branch: `gh pr merge`, `git merge`, `git push`, the GitHub merge/push/file/auto-merge/re-point tools, and raw `gh api`/`curl`. A human decision is a legacy marker (`touch`), a spoken marker, or a one-tap approval. Markers: 15 minutes, single-use. The agent cannot write a marker.
+3. **Spoken "merge"** (M1): ships OFF (`merge.spokenWord`). A message counts only if the WHOLE message is a merge command. A bare "merge" binds to the single open pull request into the base branch; with two or more the agent asks. Reason it ships off: the Claude Code docs do not say whether `UserPromptSubmit` can tell a human-typed message from a harness-injected one.
+4. **One-tap approval** (M2): `ask` instead of `deny` where an ask is known to reach the human (`default`, `acceptEdits`, `plan`). Under `auto` it is OFF until `merge.askInAutoMode` is set after a live probe, because the docs are silent on `ask` under auto and a classifier that auto-approves an ask would turn the gate into a no-op. `bypassPermissions` and unknown modes always deny.
+5. **Child merges need passing tests** (`merge.requireChildTests`): into a non-base branch, all checks must pass; failing or running checks deny; missing or unreadable checks ask or deny, never pass.
+6. **Limits:** the guards read command text and can be evaded by a command built to hide a marker name or destination; GitHub branch protection remains the real enforcement. See `docs/plans/merge-control.md` for the live probe that turns M1 and `askInAutoMode` on.

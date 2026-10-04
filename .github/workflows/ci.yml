@@ -7,9 +7,7 @@ on:
     # Draft PRs run no expensive/self-hosted CI: `validate`, `forge-validators`
     # and `reviewer clean` each carry a `draft == false` gate, so the
     # intermediate build/review/fix commits on a unit branch don't churn the
-    # single self-hosted runner. `t0-auto-merge` is the one exception — it
-    # runs on drafts too, on purpose, so its revoke path stays reachable (see
-    # that job's comment). `ready_for_review` is listed so that marking a PR
+    # single self-hosted runner. `ready_for_review` is listed so that marking a PR
     # ready — the deliberate "this unit is done" signal — fires the workflow
     # and runs the full suite exactly once. `synchronize` still covers pushes to
     # an already-ready PR (e.g. a post-CI fix), which should re-run.
@@ -99,8 +97,6 @@ jobs:
         run: node scripts/tests/reviewer-clean-check.test.js
       - name: changelog tooling unit tests (containment, symlinks, crash-safety)
         run: node scripts/tests/changelog.test.js
-      - name: t0-auto-merge unit tests (revoke attribution, state tri-state)
-        run: node scripts/tests/t0-auto-merge.test.js
       - name: test/CI digest unit tests
         run: node plugins/forge/scripts/digest/tests/digest.test.js
       # Slowest deterministic steps last, so a cheap failure never pays for
@@ -233,10 +229,9 @@ jobs:
       # The decision CODE must come from the base ref, not the PR's checkout —
       # otherwise a PR can edit scripts/reviewer-clean-check.js to delete its
       # own ack/token/truncation/instruction-surface gates and self-certify.
-      # Same reasoning and same shape as the t0-auto-merge job above; that job
-      # explains the RUNNER_TEMP-not-the-checkout and tolerated-failure choices
-      # in full. reviewer-clean-check.js requires only Node stdlib, so `scripts`
-      # alone is enough (no plugins/forge/hooks/lib, unlike the t0 job).
+      # RUNNER_TEMP-not-the-checkout: the extracted copy lives outside the PR's
+      # working tree. reviewer-clean-check.js requires only Node stdlib, so
+      # `scripts` alone is enough.
       - name: extract decision tooling from the base ref
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
@@ -271,120 +266,3 @@ jobs:
             echo "reviewer clean: running the PR's own copy (bootstrap only)."
             node scripts/reviewer-clean-check.js
           fi
-
-  t0-auto-merge:
-    # D19 T0 exception: when a PR's changed paths resolve (D17, via
-    # scripts/t0-auto-merge.js reusing plugins/forge/hooks/lib/tier.js — the
-    # same resolver `dispatch` uses to classify a unit; the merge-gate hook
-    # has NO tier exception, D19 revised) to tier T0 (docs/bookkeeping),
-    # this enables GitHub's own auto-merge (squash) instead of waiting on
-    # the explicit human "merge" + merge-gate marker every other tier still
-    # requires, and posts a PR comment naming the owner so this is never a
-    # silent merge. Every other tier is left untouched. GitHub-hosted
-    # runner is fine here — no self-hosted `claude` login is needed, only
-    # `gh` (preinstalled on GitHub-hosted runners) and Node.
-    name: T0 auto-merge (D19)
-    # Deliberately NOT gated behind `needs`/draft the way `reviewer clean` is.
-    # This job runs on `ubuntu-latest` (hosted), so a `needs` gate here buys
-    # latency, not the self-hosted VPS time `reviewer clean`'s gating exists
-    # to save — there is no expensive-job cost to protect against. More
-    # importantly, `scripts/t0-auto-merge.js` has a REVOKE path: when a PR is
-    # a draft (or its diff/config cannot be resolved), it disables a stale
-    # auto-merge grant. Adding `needs: [validate, forge-validators]` and a
-    # `draft == false` clause here — as an earlier version of this file did —
-    # made the job skip outright on drafts, which makes the revoke path
-    # unreachable exactly when it matters (a PR converted back to draft after
-    # gaining a non-T0 commit), and reordered a security-relevant revoke
-    # behind checks that have nothing to do with whether a stale grant should
-    # be torn down. If gating the ENABLE path specifically (not the revoke
-    # path) on the deterministic checks is ever wanted, do it inside
-    # `t0-auto-merge.js`, which can read check-run states itself before
-    # calling `gh pr merge --auto` — not here, where it would gate revoke too.
-    # Same-repo only, like `reviewer clean`: this job can enable auto-merge,
-    # so a fork PR must never reach it. It needs no self-hosted runner, but
-    # it does make a merge decision, which is the stronger reason to gate it.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    # Bounded like every other job: the Actions default of 360 minutes is not
-    # a useful failure mode for a job that resolves a tier and makes one API
-    # call.
-    timeout-minutes: 10
-    permissions:
-      # INTERIM, deliberately below what the feature needs. `gh pr merge
-      # --auto` runs the enablePullRequestAutoMerge mutation, which needs
-      # contents: write. But this workflow file itself comes from the PR's
-      # merge ref, so a PR can append a step to this job and inherit its
-      # token — with contents: write that is enough to merge itself. The
-      # feature is dormant anyway (branch protection is unavailable here, see
-      # the D20 blocker), so nothing is lost by withholding the write scope
-      # until the T0 job moves to its own pull_request_target workflow (the
-      # D19 follow-up), which is the shape where granting it is safe. Restore
-      # contents: write there, not here.
-      contents: read
-      # Also read, for the same reason: an appended step inherits whatever
-      # scope is granted here, and pull-requests: write lets it post or edit
-      # PR comments and request reviewers. The owner-notification comment
-      # this script posts is unreachable anyway while the enable call cannot
-      # succeed under contents: read. Both scopes come back together in the
-      # pull_request_target workflow (D19 follow-up), which is the only shape
-      # where an inherited token is safe to grant.
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          # The tier is resolved from the BASE ref's .claude/forge.json (a PR
-          # must not be able to declare itself T0), so the base ref has to be
-          # present locally.
-          fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22.x'
-      # The decision CODE must come from the base ref too, not just the config
-      # it reads. The job checks out the PR, so running scripts/t0-auto-merge.js
-      # (and the lib/tier.js it requires) straight from that checkout would let
-      # a PR rewrite the logic that decides whether it may skip the human-merge
-      # marker — the same hole reading .claude/forge.json from the base ref
-      # closes for the data. Same-repo-only limits this to actors with push
-      # access, but an autonomous agent with push access is precisely what
-      # merge-gate.js exists to gate.
-      - name: extract decision tooling from the base ref
-        env:
-          GITHUB_BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -uo pipefail
-          # Outside the workspace, and cleared first. `tar -x` OVERLAYS rather
-          # than clearing, so extracting into the PR's own checkout let a PR
-          # that commits .base-tools/scripts/t0-auto-merge.js supply the very
-          # "base-ref" code this step exists to obtain from a ref the author
-          # cannot write — the file survives extraction and the guard below
-          # sees it present. RUNNER_TEMP is outside the checkout entirely.
-          rm -rf "$RUNNER_TEMP/base-tools"
-          mkdir -p "$RUNNER_TEMP/base-tools"
-          # Tolerated failure: the base ref legitimately lacks this tooling on
-          # the very PR that introduces it (bootstrapping), and `git archive`
-          # errors on a path that doesn't exist in the ref. The next step
-          # fails closed on a missing copy rather than silently falling back
-          # to the PR's own — which is the whole point of extracting it.
-          git archive "origin/$GITHUB_BASE_REF" scripts plugins/forge/hooks/lib \
-            | tar -x -C "$RUNNER_TEMP/base-tools" || echo "base ref has no decision tooling yet"
-      - name: resolve tier, enable auto-merge for T0, notify owner
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_BASE_REF: ${{ github.base_ref }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          # Point the base-ref copy of the script at the real checkout for its
-          # git calls, since it lives outside the workspace.
-          FORGE_REPO_ROOT: ${{ github.workspace }}
-          # Actions variables are not auto-injected into the process env, so
-          # without this the documented per-repo override is inert.
-          FORGE_OWNER_HANDLE: ${{ vars.FORGE_OWNER_HANDLE }}
-        run: |
-          if [ ! -f "$RUNNER_TEMP/base-tools/scripts/t0-auto-merge.js" ]; then
-            echo "t0-auto-merge: base ref has no trusted copy of the decision"
-            echo "t0-auto-merge: tooling (expected on the PR that introduces it)."
-            echo "t0-auto-merge: NOT enabling auto-merge — running the PR's own"
-            echo "t0-auto-merge: copy would let a PR decide its own merge path."
-            echo "t0-auto-merge: leaving this PR on the explicit-merge path."
-            exit 0
-          fi
-          node "$RUNNER_TEMP/base-tools/scripts/t0-auto-merge.js"

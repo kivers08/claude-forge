@@ -93,6 +93,16 @@ function main() {
         io.deny(verdict.deny, 'PreToolUse');
         return;
       }
+      if (verdict.ask) {
+        io.telemetry(dataDir, {
+          event: 'guard_ask',
+          guard: entry.name,
+          session_id: payload.session_id || null,
+          segment: segment.slice(0, 300),
+        });
+        io.ask(verdict.ask, 'PreToolUse');
+        return;
+      }
       if (verdict.remind) reminders.push(verdict.remind);
     }
   }

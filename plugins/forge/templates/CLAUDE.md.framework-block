@@ -20,47 +20,52 @@ reviewer's model, via `tiers.<T>.budget` / `tiers.<T>.reviewModel` in
 `.claude/forge.json` (an explicit dispatch-prompt override always wins over
 either).
 
-### Merge policy: T0 auto-merge via CI, all tiers gated locally
+### Merge policy: no auto-merge, a human decision for the base branch (D32)
 
-T0 PRs *can* get GitHub's own auto-merge enabled by CI once required checks
-are green, with a notification to the owner — no explicit human "merge" for
-that tier. **The plugin does not ship that CI job.** It is a reference
-implementation in the claude-forge repository (`scripts/t0-auto-merge.js` and
-its `ci.yml` job); a project that wants the fast path installs its own copy,
-and until it does, T0 PRs merge exactly like T1-T3. T1-T3 PRs always keep the
-explicit human "merge".
-
-The merge-gate hook itself carries **no tier exception**: every merge the
-agent runs into the base branch requires the human marker, T0 included.
-(The guard classifies tokens by script-agnostic quoting, so quoting one word —
-`gh "pr" merge 7 --squash`, ASCII or non-ASCII branch names alike — no longer
-slips past it. Tracked as D27, now fixed; the guarantee below is what the code
-enforces.) The
-two are not in tension, because they act in different places. The hook gates
-the *agent's* own `gh pr merge`. The T0 fast path is performed by the CI job,
-which never goes through the hook and resolves its inputs from the base ref.
-So the agent never needs a carve-out to get T0 PRs merged — CI does it.
-
-That separation is deliberate. An earlier design let the hook skip the marker
-when it parsed `--auto` out of the command line and the diff resolved to T0.
-Deciding a security question by hand-parsing another tool's flag grammar
-proved repeatedly wrong (quoted tokens, value positions, shorthand spellings,
-clustered shorthands — each fix closed one and missed another), so the
-exception was removed from the hook rather than patched again.
+No tier merges into the base branch (`git.baseBranch`, default `main`) by
+itself. There is no auto-merge exception: docs-only (T0) changes follow the
+same rule as everything else. A feature gets its own parent branch; child
+branches merge into the parent **without** a human word, but only when their
+checks have all passed; the parent merges into the base branch only on the
+human's decision.
 
 ### Merge-gate contract
 
-The gate: nothing merges into the base branch (`git.baseBranch`, default
-`main`) without a human running `touch .git/claude-human-merge-ok` first.
-That marker is valid for 15 minutes from its mtime; a stale marker is
-treated the same as no marker — it was yesterday's decision, not today's.
-The gate also requires a squash merge (`git.squashOnly`, default `true`).
-It is scoped to the destination branch, not the tool: a PR or merge landing
-on any other branch (e.g. a child unit merging into an owner-chosen
-integration branch) is not gated here. When the destination can't be
-determined at all, the gate fails **closed** (treats it as the base
-branch) — the cost of a wrong call is one denied merge and a re-run; the
-other direction is an unreviewed merge to the base branch slipping through.
+The gate: nothing lands on the base branch without a human decision on file.
+That covers every route, not only `gh pr merge`: `git merge` and `git push`
+onto it, the GitHub tools that merge, push or edit files on it, enable
+auto-merge on a pull request into it, or re-point a pull request at it, and
+raw `gh api`/`curl` calls to the merge or refs endpoints.
+
+A human decision is one of:
+
+1. a marker the human created (`touch .git/claude-human-merge-ok`), or
+2. a spoken "merge" (only when the project sets `merge.spokenWord`; the whole
+   message must be a merge command such as "merge", "merge to main" or
+   "merge PR 12"; a bare "merge" applies only to the single open pull request
+   into the base branch, and with two or more the agent asks which), or
+3. a one-tap approval, shown instead of a denial when the session's
+   permission mode is one where an approval reaches the human (`default`,
+   `acceptEdits`, `plan`; `auto` only if `merge.askInAutoMode` is set).
+
+Markers last 15 minutes and are **single-use**: the first merge they authorize
+consumes them. A stale marker is no marker. The agent cannot create, edit or
+remove a marker (a guard denies it); the marker is the human's word, not the
+agent's. Merges must be squash merges (`git.squashOnly`, default `true`).
+
+The gate is scoped to the destination branch, not the tool. A pull request
+into any other branch (a child unit into its parent) needs no human word but
+must have all checks passing (`merge.requireChildTests`, default `true`):
+failing or still-running checks deny; no checks, or checks that cannot be
+read, ask or deny, and never count as a pass. Read the results with the digest
+script and put its summary line in the merge commit message. When the
+destination can't be determined at all, the gate fails **closed** (treats it
+as the base branch).
+
+Limits, stated plainly: the guards read command text, so a command built to
+hide the marker name or the destination can evade them. Real enforcement is
+GitHub branch protection on the base branch; the guards stop the ordinary
+and the accidental routes.
 
 ### Configuration
 
@@ -96,14 +101,5 @@ Claude never triggers a deploy or any host/infra write operation. Any host MCP
 (e.g. xcloud) is wired as a user-scoped connector and used for **read-only
 diagnostics only** (logs, deploy errors, monitoring), with its credential in an
 environment secret. Deploys and server/panel changes are owner-only.
-
-> **The T0 auto-merge exception requires branch protection.** Skipping the
-> human-merge marker for T0 is only safe because GitHub holds an `--auto`
-> merge until required status checks pass. If the base branch has no required
-> status checks configured, `--auto` merges as soon as the PR is mergeable and
-> the exception becomes an unconditional marker-free merge. The reference
-> job (`scripts/t0-auto-merge.js` in claude-forge) verifies this before
-> enabling auto-merge and declines when it is absent; any copy a project
-> installs must keep that check.
 
 <!-- forge:framework-block:end -->

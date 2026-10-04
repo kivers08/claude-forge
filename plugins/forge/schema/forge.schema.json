@@ -113,6 +113,29 @@
         }
       }
     },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Merge control (D32): how the human's decision to change the base branch reaches the guards. Nothing lands on git.baseBranch without a human marker, a spoken 'merge' (if enabled), or a one-tap approval.",
+      "properties": {
+        "spokenWord": {
+          "type": "boolean",
+          "description": "Default false. When true, a user message that is ONLY a merge command ('merge', 'merge to main', 'merge PR 12') writes a single-use, 15-minute marker. Ships off: Claude Code's docs do not say whether the hook can tell a human-typed message from a harness-injected one. Turn on only after the live probe in docs/plans/merge-control.md."
+        },
+        "ask": {
+          "type": "boolean",
+          "description": "Default true. When no marker exists, return a one-tap approval ('ask') instead of a deny, in permission modes where an ask reaches the human (default, acceptEdits, plan)."
+        },
+        "askInAutoMode": {
+          "type": "boolean",
+          "description": "Default false. Also ask under permission mode 'auto'. Leave false until a live probe shows an ask still reaches the human there; with false, merges to the base branch are denied in auto mode unless a marker exists."
+        },
+        "requireChildTests": {
+          "type": "boolean",
+          "description": "Default true. A pull request into a NON-base branch (a child unit into its parent) merges only when its checks all pass. Failing or still-running checks deny; no checks or unreadable checks ask or deny, never pass."
+        }
+      }
+    },
     "commands": {
       "type": "object",
       "additionalProperties": false,
@@ -299,7 +322,7 @@
         "T0": {
           "type": "object",
           "additionalProperties": false,
-          "description": "T0 docs/bookkeeping: docs, tasks, changelog fragments, comment-only edits. Gates: validators + one reviewer pass per batch. Merge: GitHub auto-merge when required checks are green, owner notified. All keys optional. Highest matching tier wins for a PR.",
+          "description": "T0 docs/bookkeeping: docs, tasks, changelog fragments, comment-only edits. Gates: validators + one reviewer pass per batch. Merge: same human-controlled merge to the base branch as every tier (D32). All keys optional. Highest matching tier wins for a PR.",
           "properties": {
             "paths": {
               "type": "array",

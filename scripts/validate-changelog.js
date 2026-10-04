@@ -26,7 +26,7 @@ const ROOT = process.env.FORGE_REPO_ROOT
 // unreadable/unparseable (a missing file is error:null — the normal case).
 // Silently ignoring it would validate the DEFAULT changelog.d and print a
 // green `forge validators` status computed against a config it never read.
-// Matches t0-auto-merge.js's fail-closed posture with the same config.
+// Fail-closed on a malformed config, like the other CI scripts.
 const { config, file, error } = load(ROOT);
 if (error) {
   console.error(`error: ${file} could not be read: ${error}`);

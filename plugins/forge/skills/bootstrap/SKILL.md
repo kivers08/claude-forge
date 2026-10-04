@@ -46,8 +46,8 @@ an existing configured project.
    `excludeFromWrite` naming any agents whose proposals are never persisted).
 3. **CLAUDE.md framework block** — a marker-delimited block (clear start/end
    markers so `audit-framework` can diff it later) containing the
-   coordinator-facing rules: the tier table (D17), the T0 auto-merge
-   exception (D19), the merge-gate contract, and a pointer to `forge.md` for
+   coordinator-facing rules: the tier table (D17), the merge policy
+   (no auto-merge, D32), the merge-gate contract, and a pointer to `forge.md` for
    config details. This block is copied from the plugin's own canonical copy (`${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.md.framework-block`, the text between `<!-- forge:framework-block:start -->` and `<!-- forge:framework-block:end -->`) — do not hand-author project-specific wording into it, since
    `audit-framework` compares it verbatim against the plugin's version to
    detect drift.

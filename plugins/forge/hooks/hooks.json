@@ -7,6 +7,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.js", "${CLAUDE_PLUGIN_DATA}"] }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -24,6 +31,12 @@
         "matcher": "mcp__github__merge_pull_request",
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-merge-mcp.js", "${CLAUDE_PLUGIN_DATA}"] }
+        ]
+      },
+      {
+        "matcher": "mcp__github__push_files|mcp__github__create_or_update_file|mcp__github__delete_file|mcp__github__enable_pr_auto_merge|mcp__github__update_pull_request",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-github-write.js", "${CLAUDE_PLUGIN_DATA}"] }
         ]
       },
       {

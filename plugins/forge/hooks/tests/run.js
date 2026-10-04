@@ -12,6 +12,14 @@
 //     "dirty": ["path"],                      optional: files to leave uncommitted
 //     "command": "git push origin x",         optional: fills {{COMMAND}} in the payload
 //     "filePath": "{{HOME}}/.claude/x",        optional: fills {{FILE_PATH}} in the payload
+//     "permissionMode": "default",            optional: fills {{MODE}} (default "auto", where a merge ask never fires)
+//     "spokenMarker": {"pr": 7},              optional: writes the spoken marker into the plugin data dir
+//     "spokenMarkerMinutes": 1,               optional: its age (default 1)
+//     "nestedRepo": "owner/repo",             optional: fixture is a PARENT folder holding one git repo (origin owner/repo); markers go in the repo
+//     "prompt": "merge",                      optional: fills {{PROMPT}} (UserPromptSubmit payloads)
+//     "toolName"/"toolInput": ...             optional: fill {{TOOL_NAME}} / {{TOOL_INPUT}} (GitHub-tool payloads)
+//     expect.dataFileAbsent / expect.fixtureFileAbsent: a file that must NOT exist (plugin data dir / fixture)
+//     "forgeConfig": {"merge": {...}},        optional: written to .claude/forge.json in the fixture
 //     "env": { ... },                         optional
 //     "expect": {
 //       "exit": 0, "stdoutEmpty": true, "stdoutIncludes": "...",
@@ -50,16 +58,19 @@ function makeFixture(c, n) {
   const dir = path.join(tmpRoot, `fixture-${n}`);
   fs.mkdirSync(dir, { recursive: true });
   if (c.fixture) fs.cpSync(path.join(TESTS, c.fixture), dir, { recursive: true });
+  const repo = c.nestedRepo ? path.join(dir, 'repo') : dir;
+  if (c.nestedRepo) fs.mkdirSync(repo, { recursive: true });
   if (c.git) {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'test@example.invalid']);
-    git(dir, ['config', 'user.name', 'forge tests']);
-    fs.writeFileSync(path.join(dir, '.gitkeep'), '');
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-q', '-m', 'initial']);
-    if (c.branch) git(dir, ['checkout', '-q', '-b', c.branch]);
+    git(repo, ['init', '-q', '-b', 'main']);
+    if (c.nestedRepo) git(repo, ['remote', 'add', 'origin', `https://github.com/${c.nestedRepo}.git`]);
+    git(repo, ['config', 'user.email', 'test@example.invalid']);
+    git(repo, ['config', 'user.name', 'forge tests']);
+    fs.writeFileSync(path.join(repo, '.gitkeep'), '');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'initial']);
+    if (c.branch) git(repo, ['checkout', '-q', '-b', c.branch]);
     if (c.mergeMarkerMinutes !== undefined) {
-      const marker = path.join(dir, '.git', 'claude-human-merge-ok');
+      const marker = path.join(repo, '.git', 'claude-human-merge-ok');
       fs.writeFileSync(marker, '');
       const when = new Date(Date.now() - c.mergeMarkerMinutes * 60000);
       fs.utimesSync(marker, when, when);
@@ -80,12 +91,27 @@ cases.forEach((c, n) => {
   ran++;
   const script = path.join(PLUGIN, c.script);
   const fixtureDir = (c.fixture || c.git) ? makeFixture(c, n) : null;
+  if (fixtureDir && c.forgeConfig) {
+    fs.mkdirSync(path.join(fixtureDir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(fixtureDir, '.claude', 'forge.json'), JSON.stringify(c.forgeConfig));
+  }
+  const spoken = path.join(dataDir, 'merge-ok.json');
+  fs.rmSync(spoken, { force: true });
+  if (c.spokenMarker) {
+    fs.writeFileSync(spoken, JSON.stringify(c.spokenMarker));
+    const when = new Date(Date.now() - (c.spokenMarkerMinutes === undefined ? 1 : c.spokenMarkerMinutes) * 60000);
+    fs.utimesSync(spoken, when, when);
+  }
   let payload = fs.readFileSync(path.join(TESTS, c.payload), 'utf8');
   if (fixtureDir) payload = payload.split('{{CWD}}').join(fixtureDir.replace(/\\/g, '\\\\'));
   if (c.command !== undefined) {
     const encoded = JSON.stringify(c.command).slice(1, -1);
     payload = payload.split('{{COMMAND}}').join(encoded);
   }
+  payload = payload.split('{{PROMPT}}').join(JSON.stringify(String(c.prompt === undefined ? '' : c.prompt)).slice(1, -1));
+  payload = payload.split('{{TOOL_NAME}}').join(c.toolName || '');
+  payload = payload.split('{{TOOL_INPUT}}').join(JSON.stringify(c.toolInput || {}));
+  payload = payload.split('{{MODE}}').join(c.permissionMode || 'auto');
   if (c.filePath !== undefined) {
     const encoded = JSON.stringify(String(c.filePath).split('{{HOME}}').join(os.homedir())).slice(1, -1);
     payload = payload.split('{{FILE_PATH}}').join(encoded);
@@ -142,6 +168,13 @@ cases.forEach((c, n) => {
     } catch (e) {
       problems.push(`stdout is not JSON: ${r.stdout.trim().slice(0, 200)}`);
     }
+  }
+  if (exp.dataFileAbsent && fs.existsSync(path.join(dataDir, exp.dataFileAbsent))) {
+    problems.push(`file ${exp.dataFileAbsent} should not exist in CLAUDE_PLUGIN_DATA`);
+  }
+  if (exp.fixtureFileAbsent && fixtureDir) {
+    const f = path.join(c.nestedRepo ? path.join(fixtureDir, 'repo') : fixtureDir, exp.fixtureFileAbsent);
+    if (fs.existsSync(f)) problems.push(`fixture file ${exp.fixtureFileAbsent} should have been consumed`);
   }
   if (exp.fileExists && !fs.existsSync(path.join(dataDir, exp.fileExists))) {
     problems.push(`expected file ${exp.fileExists} in CLAUDE_PLUGIN_DATA`);

@@ -2,6 +2,9 @@
   "_comment": "Declarative guard manifest for the PreToolUse Bash dispatcher. `match` is a regex tested against the LOWERCASED segment; null means the guard runs on every segment and decides for itself (config-driven guards). `script` resolves under hooks/guards/. Order is the order guards run; the first deny wins.",
   "guards": [
     { "name": "merge-gate",       "match": "\\b(gh\\s+pr\\s+merge|git\\s+merge)\\b",         "script": "merge-gate.js" },
+    { "name": "push-base",        "match": "\\bgit\\b.*\\bpush\\b",                      "script": "push-base.js" },
+    { "name": "api-merge",        "match": "\\b(gh|curl|wget|http)\\b",                   "script": "api-merge.js" },
+    { "name": "marker-write",     "match": "merge-ok|human-merge-ok",                       "script": "marker-write.js" },
     { "name": "user-level-write", "match": "\\.claude",                                      "script": "user-level-write.js" },
     { "name": "pr-create",        "match": "\\bgh\\s+pr\\s+create\\b",                       "script": "pr-create.js" },
     { "name": "git-refspec",      "match": "\\bgit\\s+push\\b",                              "script": "git-refspec.js" },
