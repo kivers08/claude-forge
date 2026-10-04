@@ -1,0 +1,48 @@
+FAIL src/b.test.js
+  ● throws
+
+    boom happened
+
+    > 1 | test('throws', () => { throw new Error('boom happened'); });
+        |                              ^
+      2 | test('ok', () => {});
+      3 |
+
+      at Object.<anonymous> (src/b.test.js:1:30)
+
+FAIL src/c.test.js
+  ● Test suite failed to run
+
+    Cannot find module './does-not-exist' from 'src/c.test.js'
+
+    > 1 | require('./does-not-exist');
+        | ^
+      2 | test('x', () => {});
+      3 |
+
+      at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+      at Object.require (src/c.test.js:1:1)
+
+FAIL src/a.test.js
+  ● math › rounds half-cent up
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 12.35
+    Received: 12.34
+
+      1 | describe('math', () => {
+      2 |   test('adds', () => { expect(1+1).toBe(2); });
+    > 3 |   test('rounds half-cent up', () => { expect(12.34).toBe(12.35); });
+        |                                                     ^
+      4 |   test.skip('later', () => {});
+      5 | });
+      6 |
+
+      at Object.toBe (src/a.test.js:3:53)
+
+Test Suites: 3 failed, 1 passed, 4 total
+Tests:       2 failed, 1 skipped, 3 passed, 6 total
+Snapshots:   0 total
+Time:        0.876 s
+Ran all test suites.

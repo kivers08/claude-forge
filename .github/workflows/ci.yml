@@ -101,6 +101,8 @@ jobs:
         run: node scripts/tests/changelog.test.js
       - name: t0-auto-merge unit tests (revoke attribution, state tri-state)
         run: node scripts/tests/t0-auto-merge.test.js
+      - name: test/CI digest unit tests
+        run: node plugins/forge/scripts/digest/tests/digest.test.js
       # Slowest deterministic steps last, so a cheap failure never pays for
       # them. `run.js` alone is ~3s — roughly half the suite's total work.
       - name: Hook unit runs (forge)

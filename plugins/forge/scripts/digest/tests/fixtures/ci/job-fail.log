@@ -1,0 +1,62 @@
+2026-10-03T15:00:44.1234567Z ##[group]Run actions/checkout@v5
+2026-10-03T15:00:44.1234567Z with:
+2026-10-03T15:00:44.1234567Z   clean: false
+2026-10-03T15:00:44.1234567Z ##[endgroup]
+2026-10-03T15:00:44.1234567Z ##[group]Run npm run lint
+2026-10-03T15:00:44.1234567Z > app@1.0.0 lint
+2026-10-03T15:00:44.1234567Z > eslint .
+2026-10-03T15:00:44.1234567Z ##[endgroup]
+2026-10-03T15:00:44.1234567Z ##[group]Run npm test -- --maxWorkers=2 --bail
+2026-10-03T15:00:44.1234567Z > app@1.0.0 test
+2026-10-03T15:00:44.1234567Z > jest --maxWorkers=2 --bail
+2026-10-03T15:00:44.1234567Z FAIL src/b.test.js
+2026-10-03T15:00:44.1234567Z   ● throws
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     boom happened
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     > 1 | test('throws', () => { throw new Error('boom happened'); });
+2026-10-03T15:00:44.1234567Z         |                              ^
+2026-10-03T15:00:44.1234567Z       2 | test('ok', () => {});
+2026-10-03T15:00:44.1234567Z       3 |
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z       at Object.<anonymous> (src/b.test.js:1:30)
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z FAIL src/c.test.js
+2026-10-03T15:00:44.1234567Z   ● Test suite failed to run
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     Cannot find module './does-not-exist' from 'src/c.test.js'
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     > 1 | require('./does-not-exist');
+2026-10-03T15:00:44.1234567Z         | ^
+2026-10-03T15:00:44.1234567Z       2 | test('x', () => {});
+2026-10-03T15:00:44.1234567Z       3 |
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z       at Resolver._throwModNotFoundError (node_modules/jest-resolve/build/index.js:1031:11)
+2026-10-03T15:00:44.1234567Z       at Object.require (src/c.test.js:1:1)
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z FAIL src/a.test.js
+2026-10-03T15:00:44.1234567Z   ● math › rounds half-cent up
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     expect(received).toBe(expected) // Object.is equality
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z     Expected: 12.35
+2026-10-03T15:00:44.1234567Z     Received: 12.34
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z       1 | describe('math', () => {
+2026-10-03T15:00:44.1234567Z       2 |   test('adds', () => { expect(1+1).toBe(2); });
+2026-10-03T15:00:44.1234567Z     > 3 |   test('rounds half-cent up', () => { expect(12.34).toBe(12.35); });
+2026-10-03T15:00:44.1234567Z         |                                                     ^
+2026-10-03T15:00:44.1234567Z       4 |   test.skip('later', () => {});
+2026-10-03T15:00:44.1234567Z       5 | });
+2026-10-03T15:00:44.1234567Z       6 |
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z       at Object.toBe (src/a.test.js:3:53)
+2026-10-03T15:00:44.1234567Z 
+2026-10-03T15:00:44.1234567Z Test Suites: 3 failed, 1 passed, 4 total
+2026-10-03T15:00:44.1234567Z Tests:       2 failed, 1 skipped, 3 passed, 6 total
+2026-10-03T15:00:44.1234567Z Snapshots:   0 total
+2026-10-03T15:00:44.1234567Z Time:        0.876 s
+2026-10-03T15:00:44.1234567Z Ran all test suites.
+2026-10-03T15:00:44.1234567Z ##[error]Process completed with exit code 1.
+2026-10-03T15:00:44.1234567Z ##[group]Run actions/cache@v4
+2026-10-03T15:00:44.1234567Z ##[endgroup]

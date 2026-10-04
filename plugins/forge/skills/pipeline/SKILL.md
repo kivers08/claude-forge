@@ -145,6 +145,10 @@ for you. Four required fields:
 - **what verified it** — which checks/tests ran and passed, the final
   review round's fix-worthy count (must be 0 to reach this step), and how many
   fix-and-re-review rounds it took (0, 1, or 2).
+  Take test counts and failures from the digest script, not from your own
+  summary: `node <forge plugin root>/scripts/digest/digest.js test -- <test command>`
+  (or `digest.js ci <owner/repo> <run-id|branch>` for CI). Report its output
+  as given; if it says `COULD NOT PARSE`, say so rather than inferring a result.
 - **risks** — anything flagged in step 5, any non-blocking reviewer
   suggestions left unaddressed, and anything the implementer's (or
   bug-fixer's) own report flagged as uncertain or left undone.
