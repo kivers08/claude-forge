@@ -56,8 +56,10 @@ test('parent rules: missing, strict up-to-date, child PR rule', () => {
   assert(has(evaluate(GOOD_REPO, { main: GOOD_MAIN, parent: GOOD_PARENT, child: [pr(0)] }), 'Child branches'), 'child PR rule');
 });
 
-test('unreadable main is a finding, never a pass', () => {
+test('unreadable main, parent or child rules are findings, never a pass', () => {
   assert(has(evaluate(GOOD_REPO, { main: null, parent: GOOD_PARENT }), 'could not be read'), 'null main');
+  assert(has(evaluate(GOOD_REPO, { main: GOOD_MAIN, parent: null, child: [] }, FORGE_CHECKS), 'cannot be verified'), 'null parent');
+  assert(has(evaluate(GOOD_REPO, { main: GOOD_MAIN, parent: GOOD_PARENT, child: null }, FORGE_CHECKS), 'cannot be verified'), 'null child');
 });
 
 console.log(`\n${ran - failed}/${ran} passed`);

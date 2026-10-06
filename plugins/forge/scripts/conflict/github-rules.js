@@ -95,7 +95,9 @@ function evaluate(repo, branches, expect) {
   } else {
     f.push('Main branch rules could not be read.');
   }
-  if (branches.parent) {
+  if (branches.parent === null) {
+    f.push('Parent branch (feature/*) rules could not be read, so D-BH cannot be verified.');
+  } else if (branches.parent) {
     if (!branches.parent.length) f.push('Parent branches (feature/*) have no rules; D-BH needs PR + squash + required checks there.');
     else {
       if (!checkNames(branches.parent).length) f.push('Parent branches require no status checks; children would auto-merge untested (D-BH).');
@@ -108,7 +110,9 @@ function evaluate(repo, branches, expect) {
       if (!ruleOf(branches.parent, 'pull_request')) f.push('Parent branches do not require a pull request (D-BH).');
     }
   }
-  if (branches.child && ruleOf(branches.child, 'pull_request')) {
+  if (branches.child === null) {
+    f.push('Child branch (claude/*) rules could not be read, so D-BG 3 cannot be verified.');
+  } else if (branches.child && ruleOf(branches.child, 'pull_request')) {
     f.push('Child branches (claude/*) require a pull request to change; Claude pushes to its own child branch directly, so this may block work (D-BG 3).');
   }
   return { findings: f, ok };
@@ -133,7 +137,7 @@ function main(argv) {
   const repo = repoRes.data;
   const base = repo.default_branch || 'main';
   const read = (b) => {
-    const r = apiGet(`repos/${slug}/rules/branches/${b.split('/').map(encodeURIComponent).join('/')}`);
+    const r = apiGet(`repos/${slug}/rules/branches/${encodeURIComponent(b)}`);
     return r.error || !Array.isArray(r.data) ? null : r.data;
   };
   const branches = {

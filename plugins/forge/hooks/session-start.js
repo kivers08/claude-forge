@@ -73,20 +73,18 @@ function yamlField(text, key) {
   return line ? line.slice(key.length + 1).trim().replace(/^["']|["']$/g, '') || null : null;
 }
 
-// Cut an index body to the lines that fit `room` bytes (index lines are newest
-// first by the hub contract). Returns null when not even one line fits.
-function fitLines(body, room) {
+// Cut an index body to its first (newest, by the hub contract) lines so that
+// head + kept lines + the notice fit `room` BYTES. Returns the block text, or
+// null when not even one line fits.
+function fitLines(head, body, room, rel) {
   const all = body.split('\n');
-  const kept = [];
-  let size = 0;
-  for (const l of all) {
-    if (size + l.length + 1 > room) break;
-    kept.push(l);
-    size += l.length + 1;
+  const bytes = (t) => Buffer.byteLength(t, 'utf8');
+  const notice = (left) => `\n(${left} older line(s) not injected: grep ${rel} or run the hub script's find <label>.)`;
+  for (let n = all.length - 1; n >= 1; n--) {
+    const text = `${head}${all.slice(0, n).join('\n')}${notice(all.length - n)}`;
+    if (bytes(text) <= room) return text;
   }
-  if (!kept.length) return null;
-  const left = all.length - kept.length;
-  return { text: kept.join('\n'), left };
+  return null;
 }
 
 function sliceFor(mode, text) {
@@ -162,7 +160,10 @@ function main() {
   addKey('lessons');
   addKey('sprint');
 
-  let used = lines.join('\n').length;
+  // Budget is in BYTES (taskFiles.injectionBudget); count UTF-8 bytes, not
+  // UTF-16 code units, so non-ASCII text cannot overrun it.
+  const bytes = (t) => Buffer.byteLength(t, 'utf8');
+  let used = bytes(lines.join('\n'));
   const skipped = [];
   for (const src of sources) {
     const { rel, mode } = src;
@@ -172,12 +173,12 @@ function main() {
     if (!body) { skipped.push(`${rel} (no ${mode} content)`); continue; }
     const head = `\n\n${rel} [${src.hub ? 'hub index, newest first' : mode}]:\n`;
     let block = head + body;
-    if (used + block.length > budget) {
-      const fit = src.hub ? fitLines(body, budget - used - head.length - 120) : null;
+    if (used + bytes(block) > budget) {
+      const fit = src.hub ? fitLines(head, body, budget - used, rel) : null;
       if (!fit) { skipped.push(`${rel} (over injectionBudget)`); continue; }
-      block = `${head}${fit.text}\n(${fit.left} older line(s) not injected: grep ${rel} or run the hub script's find <label>.)`;
+      block = fit;
     }
-    used += block.length;
+    used += bytes(block);
     lines.push(block.trim());
   }
   if (skipped.length) lines.push(`Not injected: ${skipped.join(', ')}. Grep them directly if needed.`);

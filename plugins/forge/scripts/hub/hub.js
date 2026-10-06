@@ -21,7 +21,12 @@
 //   node hub.js build             rebuild every hub in .claude/forge.json "hubs"
 //   node hub.js check             exit 1 if a hub is stale or an entry is invalid
 //   node hub.js find <label>...   print the full entries carrying any label
-//                                 (newest first; --limit N, default 10)
+//                                 (newest first; --limit N, default 10;
+//                                 --hub <path> searches only that hub)
+//
+// Every configured path must stay inside the repository (no "..", no
+// absolute path, no symlink leading out); a hub is never written through a
+// symlink.
 //
 // Exit codes: 0 ok, 1 problems found (listed), 2 usage/config error.
 // Node stdlib only (D11).
@@ -41,6 +46,29 @@ function readText(file) {
   }
 }
 
+// Every configured path must stay inside the repository: no absolute paths,
+// no "..", and no symlink (on the path or any parent) that points outside.
+// Returns the absolute path, or throws with a plain reason.
+function inRepo(root, rel, what) {
+  if (typeof rel !== 'string' || !rel.trim()) throw new Error(`${what}: empty path`);
+  if (path.isAbsolute(rel)) throw new Error(`${what}: ${rel} must be relative to the repository`);
+  const realRoot = fs.realpathSync(root);
+  const abs = path.resolve(realRoot, rel);
+  const inside = (p) => p === realRoot || p.startsWith(realRoot + path.sep);
+  if (!inside(abs)) throw new Error(`${what}: ${rel} is outside the repository`);
+  // Resolve the deepest existing ancestor (or the file itself) through symlinks.
+  let probe = abs;
+  while (!fs.existsSync(probe) && probe !== realRoot) probe = path.dirname(probe);
+  let real;
+  try {
+    real = fs.realpathSync(probe);
+  } catch (e) {
+    throw new Error(`${what}: ${rel} could not be resolved`);
+  }
+  if (!inside(real)) throw new Error(`${what}: ${rel} leads outside the repository through a symlink`);
+  return abs;
+}
+
 function loadConfig(root) {
   const file = path.join(root, '.claude', 'forge.json');
   const text = readText(file);
@@ -54,6 +82,16 @@ function loadConfig(root) {
   const hubs = json.hubs;
   if (!hubs || !Array.isArray(hubs.files) || !hubs.files.length) return { error: 'no "hubs.files" in .claude/forge.json' };
   if (typeof hubs.labels !== 'string' || !hubs.labels) return { error: 'no "hubs.labels" in .claude/forge.json' };
+  try {
+    inRepo(root, hubs.labels, 'hubs.labels');
+    for (const h of hubs.files) {
+      if (!h || !Array.isArray(h.spokes) || !h.spokes.length) throw new Error('every hubs.files item needs a hub and at least one spoke');
+      inRepo(root, h.hub, 'hub');
+      for (const sp of h.spokes) inRepo(root, sp, 'spoke');
+    }
+  } catch (e) {
+    return { error: e.message };
+  }
   return { hubs };
 }
 
@@ -110,7 +148,8 @@ function validate(entries, allowed) {
     else seen.set(e.id, `${e.file}:${e.line}`);
     if (e.labels.length < 1 || e.labels.length > 3) problems.push(`${where}: needs 1 to 3 labels, has ${e.labels.length}`);
     for (const l of e.labels) if (!allowed.has(l)) problems.push(`${where}: label "${l}" is not in the labels file`);
-    if (Number.isNaN(Date.parse(e.date))) problems.push(`${where}: date ${e.date} is not a real date`);
+    const t = Date.parse(`${e.date}T00:00:00Z`);
+    if (Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== e.date) problems.push(`${where}: date ${e.date} is not a real date`);
   }
   return problems;
 }
@@ -192,7 +231,14 @@ function cmdBuild(root) {
   if (a.error) return fail(2, a.error);
   if (a.problems.length) return fail(1, `hub build refused, fix these first:\n${a.problems.map((p) => `  ${p}`).join('\n')}`);
   for (const h of a.hubs) {
-    const file = path.join(root, h.rel);
+    const file = inRepo(root, h.rel, 'hub');
+    let isLink = false;
+    try {
+      isLink = fs.lstatSync(file).isSymbolicLink();
+    } catch (e) {
+      isLink = false;
+    }
+    if (isLink) return fail(2, `hub ${h.rel} is a symlink; refusing to write through it`);
     const before = readText(file);
     if (before !== h.text) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -223,13 +269,15 @@ function cmdCheck(root) {
   return 0;
 }
 
-function cmdFind(root, labels, limit) {
+function cmdFind(root, labels, limit, hubSel) {
   const a = analyse(root);
   if (a.error) return fail(2, a.error);
+  const pool = hubSel ? a.hubs.filter((h) => h.rel === hubSel) : a.hubs;
+  if (hubSel && !pool.length) return fail(2, `no hub ${hubSel} in .claude/forge.json (have: ${a.hubs.map((h) => h.rel).join(', ')})`);
   const unknown = labels.filter((l) => !a.allowed.has(l));
   if (unknown.length) return fail(2, `unknown label(s): ${unknown.join(', ')}. Allowed: ${[...a.allowed].join(', ')}`);
   const want = new Set(labels);
-  const all = sortNewest(a.hubs.flatMap((h) => h.entries)).filter((e) => e.labels.some((l) => want.has(l)));
+  const all = sortNewest(pool.flatMap((h) => h.entries)).filter((e) => e.labels.some((l) => want.has(l)));
   const shown = all.slice(0, limit);
   for (const e of shown) {
     console.log(`${e.heading}\n${e.body.join('\n').trim()}\n(${e.file}:${e.line})\n`);
@@ -247,17 +295,19 @@ function main(argv) {
   const args = argv.slice(2);
   let root = process.cwd();
   let limit = 10;
+  let hubSel = null;
   const rest = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i] || '.');
     else if (args[i] === '--limit') limit = Math.max(1, Number(args[++i]) || 10);
+    else if (args[i] === '--hub') hubSel = args[++i] || null;
     else rest.push(args[i]);
   }
   const [cmd, ...more] = rest;
   if (cmd === 'build') return cmdBuild(root);
   if (cmd === 'check') return cmdCheck(root);
-  if (cmd === 'find' && more.length) return cmdFind(root, more, limit);
-  return fail(2, 'usage: hub.js build | check | find <label>... [--limit N] [--root DIR]');
+  if (cmd === 'find' && more.length) return cmdFind(root, more, limit, hubSel);
+  return fail(2, 'usage: hub.js build | check | find <label>... [--hub <hub path>] [--limit N] [--root DIR]');
 }
 
 if (require.main === module) {

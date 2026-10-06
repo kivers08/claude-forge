@@ -156,6 +156,47 @@ test('missing config or labels file is a usage error (exit 2)', () => {
   assert(r.status === 2 && r.stderr.includes('labels file'), r.stderr);
 });
 
+test('a hub path outside the repository is refused, nothing written', () => {
+  const dir = repo('escape', { 'labels.md': LABELS, 'docs/decisions.md': SPOKE },
+    { labels: 'labels.md', files: [{ hub: '../escaped-hub.md', spokes: ['docs/decisions.md'] }] });
+  const r = run(dir, 'build');
+  assert(r.status === 2 && r.stderr.includes('outside the repository'), r.stderr);
+  assert(!fs.existsSync(path.join(tmp, 'escaped-hub.md')), 'nothing written outside');
+});
+
+test('a symlinked directory leading outside is refused', () => {
+  const outside = path.join(tmp, 'outside-dir');
+  fs.mkdirSync(outside, { recursive: true });
+  const dir = repo('symlink', { 'labels.md': LABELS, 'docs/decisions.md': SPOKE },
+    { labels: 'labels.md', files: [{ hub: 'out/hub.md', spokes: ['docs/decisions.md'] }] });
+  fs.symlinkSync(outside, path.join(dir, 'out'));
+  const r = run(dir, 'build');
+  assert(r.status === 2 && r.stderr.includes('symlink'), r.stderr);
+  assert(!fs.existsSync(path.join(outside, 'hub.md')), 'nothing written through the symlink');
+});
+
+test('an impossible calendar date is refused', () => {
+  const dir = repo('baddate', { 'labels.md': LABELS, 'docs/decisions.md': `${SPOKE}\n### D-X | 2026-02-30 | ci | Not a real day.\n` });
+  const r = run(dir, 'check');
+  assert(r.status === 1 && r.stderr.includes('2026-02-30 is not a real date'), r.stderr);
+});
+
+test('find --hub searches only the named hub', () => {
+  const dir = repo('two-hubs', {
+    'labels.md': LABELS,
+    'docs/decisions.md': SPOKE,
+    'docs/lessons.md': '# Lessons\n### L-001 | 2026-10-05 | merge | A merge lesson.\nDetail.\n',
+  }, { labels: 'labels.md', files: [
+    { hub: 'docs/decisions-hub.md', spokes: ['docs/decisions.md'] },
+    { hub: 'docs/lessons-hub.md', spokes: ['docs/lessons.md'] },
+  ] });
+  const all = run(dir, 'find', 'merge');
+  assert(all.stdout.includes('L-001') && all.stdout.includes('D-B'), all.stdout);
+  const only = run(dir, 'find', 'merge', '--hub', 'docs/decisions-hub.md');
+  assert(only.status === 0 && !only.stdout.includes('L-001') && only.stdout.includes('D-B'), only.stdout + only.stderr);
+  assert(run(dir, 'find', 'merge', '--hub', 'nope.md').status === 2, 'unknown hub');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

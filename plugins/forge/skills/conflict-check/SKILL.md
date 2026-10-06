@@ -23,10 +23,11 @@ Read the decisions hub (the `hubs.files` entry for decisions in
 for the rule labels only, newest first:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" find merge ci security --limit 15
+node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" find merge ci security --hub <decisions hub path> --limit 15
 ```
 
-A later entry overrides an earlier one on the same point. Note each rule as
+`--hub` keeps lessons and other hubs out: only decisions are rules. A later
+entry overrides an earlier one on the same point. Note each rule as
 one line with its ID (example: "squash only into main, D-BC").
 
 ## 2. Read what is actually in force
