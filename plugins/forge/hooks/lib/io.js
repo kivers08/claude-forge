@@ -64,6 +64,19 @@ function deny(reason, event) {
   });
 }
 
+// PreToolUse ask: the app shows the human an approve/deny prompt. Only used
+// where lib/merge-control.js knows an ask reaches the human (never under
+// `auto` or `bypassPermissions` unless explicitly enabled after a live probe).
+function ask(reason, event) {
+  emit({
+    hookSpecificOutput: {
+      hookEventName: event || 'PreToolUse',
+      permissionDecision: 'ask',
+      permissionDecisionReason: reason,
+    },
+  });
+}
+
 // Non-blocking note back to the model. Ignored by Claude Code versions that do
 // not support additionalContext on this event, which is the fail-open case.
 function context(text, event) {
@@ -96,6 +109,6 @@ function sessionStateFile(dir, sessionId, name) {
 }
 
 module.exports = {
-  readStdin, parsePayload, dataDir, appendLine, emit, deny, context,
+  readStdin, parsePayload, dataDir, appendLine, emit, deny, ask, context,
   telemetry, sessionStateFile,
 };

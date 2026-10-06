@@ -65,8 +65,8 @@ t('highest matching tier wins across multiple changed paths', () => {
 t('an unmatched path forces the default tier, not "no opinion"', () => {
   // Regression: the resolver used to scan tiers globally ("did ANY path match
   // this tier's globs"), so a path matching nothing contributed nothing and
-  // docs + arbitrary source resolved to T0 — handing `gh pr merge --auto` the
-  // marker-free fast path for unclassified code. Resolution is per path, then
+  // docs + arbitrary source resolved to T0 — giving unclassified
+  // code the lightest (docs-only) gates. Resolution is per path, then
   // the max across paths.
   assert.strictEqual(resolveTier(config, ['docs/readme.md', 'src/app.js']), 'T2');
   assert.strictEqual(resolveTier(config, ['.claude/forge.json', 'src/app.js']), 'T2');

@@ -29,9 +29,8 @@ const { spawnSync } = require('child_process');
 // Normally the repo root two levels up from this file. FORGE_REPO_ROOT lets
 // the workflow run a base-ref COPY of this script (extracted outside the
 // checkout — see ci.yml's reviewer-clean job) while still pointing every git
-// call, the diff file, and --add-dir at the real PR checkout. Mirrors
-// t0-auto-merge.js: the decision code must come from a ref the PR author
-// cannot write, or a PR could delete this file's own ack/token/truncation/
+// call, the diff file, and --add-dir at the real PR checkout. The decision
+// code must come from a ref the PR author cannot write, or a PR could delete this file's own ack/token/truncation/
 // instruction-surface gates and self-certify.
 const ROOT = process.env.FORGE_REPO_ROOT
   ? path.resolve(process.env.FORGE_REPO_ROOT)

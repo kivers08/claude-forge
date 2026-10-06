@@ -1,14 +1,39 @@
 #!/usr/bin/env node
 'use strict';
-// Fake `gh` for hook tests. Only understands what merge-gate.js calls:
-//   gh pr view [<identifier>] --json baseRefName -q .baseRefName
-// Prints $FAKE_GH_BASE_REF (default "main") and exits 0, so tests can steer
-// the resolved PR destination without a real GitHub CLI or network access.
-// Any other invocation exits 1 with nothing on stdout.
+// Fake `gh` for hook tests. Understands only what the merge-control code calls:
+//   gh pr view [<id>] --json baseRefName -q .baseRefName   prints $FAKE_GH_BASE_REF (default "main")
+//   gh pr view [<id>] --json number -q .number            prints $FAKE_GH_PR_NUMBER (default "7")
+//   gh pr list ... -q .[].number    prints $FAKE_GH_OPEN_PRS (comma list, default "7"), one per line
+//   gh pr checks N --json name,bucket   prints a JSON array steered by
+//     $FAKE_GH_CHECKS = pass (default) | fail | pending | none | unreadable
+// $FAKE_GH_FAIL makes every call exit 1 (gh missing / no network). Any other
+// invocation exits 1 with nothing on stdout. Defaults mean tests that never set
+// these see the same behavior as before the merge-control work.
 const args = process.argv.slice(2);
 if (process.env.FAKE_GH_FAIL) process.exit(1);
+if (args[0] === 'pr' && args[1] === 'view' && args.includes('number')) {
+  process.stdout.write((process.env.FAKE_GH_PR_NUMBER || '7') + '\n');
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'view') {
   process.stdout.write((process.env.FAKE_GH_BASE_REF || 'main') + '\n');
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'list') {
+  const open = (process.env.FAKE_GH_OPEN_PRS === undefined ? '7' : process.env.FAKE_GH_OPEN_PRS).split(',').filter(Boolean);
+  process.stdout.write(open.join('\n') + (open.length ? '\n' : ''));
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'checks') {
+  const mode = process.env.FAKE_GH_CHECKS || 'pass';
+  if (mode === 'unreadable') process.exit(1);
+  const rows = {
+    pass: [{ name: 'validate', bucket: 'pass' }, { name: 'forge validators', bucket: 'pass' }],
+    fail: [{ name: 'validate', bucket: 'fail' }],
+    pending: [{ name: 'validate', bucket: 'pending' }],
+    none: [],
+  }[mode] || [];
+  process.stdout.write(JSON.stringify(rows));
   process.exit(0);
 }
 process.exit(1);

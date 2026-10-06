@@ -13,7 +13,7 @@
 // No `tiers` config at all, or changed paths that match none of them,
 // resolves to T2 (app code) — the safe default named explicitly in D17.
 // This must never silently resolve to T0: an unconfigured project must not
-// get the T0 auto-merge fast path just because nothing told it otherwise.
+// get the lightest gates just because nothing told it otherwise.
 const { get } = require('./config');
 const { matchAny } = require('./glob');
 
@@ -30,8 +30,8 @@ const DEFAULT_TIER = 'T2';
 // matching no tier is itself T2, so a PR touching one doc plus one
 // unclassified source file is T2, not T0. Scanning tiers globally instead
 // let that PR resolve to T0 (only T0's globs matched anything, and an
-// unmatched path contributed nothing), which handed `gh pr merge --auto` the
-// marker-free fast path for arbitrary source — exactly the "must never
+// unmatched path contributed nothing), which gave arbitrary source
+// the lightest (docs-only) gates — exactly the "must never
 // silently resolve to T0" failure this module's header warns about.
 function resolveTier(config, changedPaths) {
   const paths = Array.isArray(changedPaths) ? changedPaths.filter(Boolean) : [];
