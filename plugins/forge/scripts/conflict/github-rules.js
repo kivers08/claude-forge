@@ -136,7 +136,9 @@ function main(argv) {
   }
   const opt = (name, dflt) => {
     const i = args.indexOf(name);
-    return i === -1 ? dflt : args[i + 1];
+    if (i === -1) return dflt;
+    const v = args[i + 1];
+    return v === undefined || v.startsWith('--') ? dflt : v;
   };
   if (!slug) {
     console.error('usage: github-rules.js <owner/repo> [--checks "a,b"] [--parent-checks "a,b"] [--parent feature/x] [--child claude/x] [--json]');

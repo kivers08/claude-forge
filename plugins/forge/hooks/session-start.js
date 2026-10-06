@@ -70,7 +70,11 @@ function yamlField(text, key) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
   if (!m) return null;
   const line = m[1].split(/\r?\n/).find((l) => l.startsWith(`${key}:`));
-  return line ? line.slice(key.length + 1).trim().replace(/^["']|["']$/g, '') || null : null;
+  if (!line) return null;
+  let v = line.slice(key.length + 1).trim();
+  if (/^["']/.test(v)) v = v.replace(/^(["'])(.*?)\1.*$/, '$2');
+  else v = v.replace(/\s+#.*$/, '').trim();
+  return v || null;
 }
 
 // Cut an index body to its first (newest, by the hub contract) lines so that
@@ -148,14 +152,22 @@ function main() {
 
   const hubFiles = cfg.get(config, 'hubs.files', []);
   const sources = [];
+  // A file is injected once: a taskFiles key naming a hub (or one of its
+  // spokes, which carry no ## Index) is covered by that hub.
+  const hubPaths = new Set();
+  for (const h of Array.isArray(hubFiles) ? hubFiles : []) {
+    if (h && typeof h.hub === 'string') hubPaths.add(h.hub);
+    for (const sp of (h && Array.isArray(h.spokes) ? h.spokes : [])) hubPaths.add(sp);
+  }
   const addKey = (key) => {
     const rel = taskFiles && taskFiles[key];
-    if (typeof rel === 'string' && rel) sources.push({ rel, mode: (modes && modes[key]) || DEFAULT_MODES[key] || 'index' });
+    if (typeof rel !== 'string' || !rel || hubPaths.has(rel) || sources.some((x) => x.rel === rel)) return;
+    sources.push({ rel, mode: (modes && modes[key]) || DEFAULT_MODES[key] || 'index' });
   };
   addKey('todo');
   addKey('handoff');
   for (const h of Array.isArray(hubFiles) ? hubFiles : []) {
-    if (h && typeof h.hub === 'string' && h.hub) sources.push({ rel: h.hub, mode: 'index', hub: true });
+    if (h && typeof h.hub === 'string' && h.hub && !sources.some((x) => x.rel === h.hub)) sources.push({ rel: h.hub, mode: 'index', hub: true });
   }
   addKey('lessons');
   addKey('sprint');

@@ -167,11 +167,13 @@ function hubLine(e) {
 }
 
 function renderHub(hubRel, spokes, entries) {
-  const newest = entries.length ? sortNewest(entries)[0].date : new Date().toISOString().slice(0, 10);
+  // No wall-clock values: `check` re-renders and compares byte for byte, so
+  // an empty hub simply has no date until its first entry.
+  const newest = entries.length ? sortNewest(entries)[0].date : null;
   return [
     '---',
     `id: ${path.basename(hubRel, '.md')}`,
-    `date: ${newest}`,
+    ...(newest ? [`date: ${newest}`] : []),
     'status: generated',
     'labels: []',
     '---',

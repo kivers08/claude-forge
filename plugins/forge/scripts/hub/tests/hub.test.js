@@ -197,6 +197,14 @@ test('find --hub searches only the named hub', () => {
   assert(run(dir, 'find', 'merge', '--hub', 'nope.md').status === 2, 'unknown hub');
 });
 
+test('an empty spoke builds a hub that stays checkable (no date drift)', () => {
+  const dir = repo('empty-spoke', { 'labels.md': LABELS, 'docs/decisions.md': '# Decisions\n## Log\n' });
+  assert(run(dir, 'build').status === 0, 'build');
+  const text = fs.readFileSync(path.join(dir, 'docs/decisions-hub.md'), 'utf8');
+  assert(!/^date:/m.test(text), 'no date line without entries');
+  assert(run(dir, 'check').status === 0, 'check after build');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

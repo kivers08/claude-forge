@@ -315,6 +315,17 @@
     "forgeConfig": { "taskFiles": { "injectionBudget": 1500 }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
     "expect": { "exit": 0, "stdoutIncludes": "older line(s) not injected", "maxContextBytes": 1700 } },
 
+  { "name": "session-start: a trailing YAML comment on forge_version is ignored",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs", "pluginsHome": "current",
+    "expect": { "exit": 0, "stdoutIncludes": "forge version changed since the last session (docs/handoff.md says 0.0.1, running" } },
+
+  { "name": "session-start: a lessons key pointing at a hub spoke is not reported as skipped",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "docs/handoff.md", "lessons": "docs/decisions.md" }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
+    "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
+
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
     "git": true, "branch": "feat/x", "dirty": ["src/app.js"],
