@@ -64,10 +64,52 @@ script and put its summary line in the merge commit message. When the
 destination can't be determined at all, the gate fails **closed** (treats it
 as the base branch).
 
+Auto-merge on a child pull request is allowed as soon as it is opened when the
+parent branch's GitHub rules require a pull request and a non-empty list of
+status checks: GitHub then holds the merge until they pass. Otherwise the
+checks must already pass. Auto-merge into the base branch is never allowed.
+
+The parent pull request's title and description are the plain-English change
+report, and they become the squash message: a merge into the base branch must
+pass `commit_title` = the PR's current title (optionally with ` (#N)`) and
+`commit_message` = its current description, or it is refused
+(`merge.requireSquashMessage`). Rewrite the description first, then merge.
+
+The paid `reviewer clean` check runs on the parent pull request. It runs on
+child pull requests only when the parent PR's description says
+`Planned children: N` with N above 3 (or the count cannot be read).
+
 Limits, stated plainly: the guards read command text, so a command built to
 hide the marker name or the destination can evade them. Real enforcement is
 GitHub branch protection on the base branch; the guards stop the ordinary
 and the accidental routes.
+
+### Session start: say which forge is running
+
+forge's SessionStart context always begins with the line
+`forge <version> (<commit>) loaded`. If that line is missing, or a
+`forge WARNING` line follows it (out of date, commit unreadable), the FIRST
+thing said to the human in the session is that forge is not loaded or out of
+date, and how to fix it: the environment setup script
+(`templates/env-setup-script.sh` in the plugin) reinstalls forge when its
+commit is behind, and the fix takes effect in a new session. Never work on
+silently with a missing or stale forge.
+
+**First reply: warnings, then a two-line status.** Claude's first reply in a
+session opens with any session-start warning (forge missing or out of date,
+as above), then two plain lines: (1) where things stand, (2) what is next,
+both taken from the injected handoff note and to-dos. When session start says
+"forge version changed", the conflict check (`/forge:conflict-check`) runs
+before other work and its result follows the two lines.
+
+**Memory: hub and spokes (when `.claude/forge.json` has `hubs`).** Session
+start injects each hub's index (newest lines first, within the byte budget),
+the open to-dos and the top of the handoff note. Read nothing else whole. For
+detail, grep the entry ID or run the hub script's `find <label>`
+(`node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" find <label>`). When dispatching a helper agent, pass it only the few
+matching entries; helpers never read the hub or whole memory files. Formats:
+`templates/formats.md`. New entries are written as spoke entries and the hub
+is rebuilt by the script, never edited by hand.
 
 ### Configuration
 

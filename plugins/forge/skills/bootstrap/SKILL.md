@@ -63,6 +63,14 @@ an existing configured project.
    project-side `.claude/settings.json`/`.claude/settings.local.json`
    content; the plugin cannot ship `permissions` itself, D2).
 
+7. **Hub-and-spoke memory** — `labels.md` at the repository root from the
+   plugin's `templates/labels.md` (the 12 standard labels; ask the human for
+   this repo's own labels), a `hubs` block in `.claude/forge.json`, the
+   decisions/lessons spoke files and a handoff note in the formats of
+   `templates/formats.md`, then `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" build` to create the hubs.
+   Also hand the human `templates/env-setup-script.sh` for the cloud
+   environment's Setup script box.
+
 ## Process
 
 1. Check for an existing `.claude/forge.json`. If one exists with real
@@ -71,7 +79,7 @@ an existing configured project.
 2. Gather the handful of genuinely project-specific values via `brainstorm`
    if they aren't already stated (base branch, task file paths, stack line,
    lint/deploy commands). Don't guess these.
-3. Write the six items above.
+3. Write the seven items above.
 4. Validate `.claude/forge.json` against the schema before finishing —
    reuse the same validation logic `scripts/validate-plugins.js` uses for
    the plugin's own schema checks, applied here to the instance document.

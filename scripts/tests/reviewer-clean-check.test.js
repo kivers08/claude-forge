@@ -17,6 +17,8 @@ const {
   matchesInstructionSurface,
   capText,
   computeAndWriteDiff,
+  plannedChildren,
+  childReviewDecision,
 } = require('../reviewer-clean-check.js');
 
 const BASE = '3e5422e9955e3af53f55d889e4f3932f454bde16';
@@ -36,6 +38,22 @@ function test(name, fn) {
 }
 
 console.log('verifyDiffResolvedAck:');
+
+test('D-AW: reads "Planned children: N" from the parent description', () => {
+  assert.strictEqual(plannedChildren('Change report\n\nPlanned children: 3\n'), 3);
+  assert.strictEqual(plannedChildren('- **Planned children: 5**'), 5);
+  assert.strictEqual(plannedChildren('no count here'), null);
+});
+
+test('D-AW: child PRs skip the reviewer with 3 or fewer planned children', () => {
+  assert.strictEqual(childReviewDecision('feature/x', 'main', 'Planned children: 3').review, false);
+  assert.strictEqual(childReviewDecision('feature/x', 'main', 'Planned children: 4').review, true);
+});
+
+test('D-AW: unknown count reviews; PRs into main always review', () => {
+  assert.strictEqual(childReviewDecision('feature/x', 'main', null).review, true);
+  assert.strictEqual(childReviewDecision('main', 'main', 'Planned children: 1').review, true);
+});
 
 test('accepts full SHAs with the exact token', () => {
   assert.strictEqual(ack(`diff-resolved: ${BASE}..${HEAD} token=${TOKEN}`).ok, true);

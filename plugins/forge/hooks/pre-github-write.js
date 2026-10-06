@@ -11,6 +11,7 @@ const io = require('./lib/io');
 const cfg = require('./lib/config');
 const mc = require('./lib/merge-control');
 const guard = require('./guards/merge-gate');
+const githubRead = require('./lib/github-read');
 
 function main() {
   const payload = io.parsePayload(io.readStdin());
@@ -41,9 +42,13 @@ function main() {
     return;
   }
 
-  // Auto-merge on a CHILD PR: the later merge happens with no hook watching,
-  // so the child test rule must hold NOW (passing checks), or no auto-merge.
+  // Auto-merge on a CHILD PR: the later merge happens with no hook watching.
+  // Allowed at once when GitHub itself holds the merge until checks pass (the
+  // parent branch's rules require a PR and a non-empty list of status checks;
+  // opusjevos D-BH). Otherwise the child test rule must hold NOW (passing
+  // checks), or no auto-merge.
   if (/enable_pr_auto_merge$/.test(tool) && targetBranch && targetBranch !== base) {
+    if (githubRead.branchRequiresChecks(githubRead.branchRules(slug, targetBranch, projectDir))) return;
     const v = mc.childVerdict({ config, projectDir, payload }, Number.isFinite(pr) ? pr : undefined, slug, `auto-merge on PR #${Number.isFinite(pr) ? pr : '?'}`);
     if (!v) return;
     io.telemetry(dataDir, { event: v.ask ? 'guard_ask' : 'guard_deny', guard: 'merge-gate', tool, session_id: payload.session_id || null });

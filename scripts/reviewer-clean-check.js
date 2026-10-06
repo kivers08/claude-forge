@@ -129,6 +129,70 @@ function postStatus(state, description) {
   });
 }
 
+// opusjevos D-AW/D-AX: the paid reviewer runs on the PARENT pull request (into
+// the base branch), and on child pull requests only when the plan has more
+// than three children. The count comes from the line "Planned children: N" in
+// the description of the open pull request whose HEAD is this child's base
+// branch (the parent PR), set when the owner approves the plan. No parent PR,
+// or no such line, means the count is unknown: review (fail toward review).
+function plannedChildren(body) {
+  const m = /^[\s>*_-]*Planned children:\s*(\d+)\b/im.exec(String(body || ''));
+  return m ? Number(m[1]) : null;
+}
+
+// Pure. Returns { review: boolean, reason }.
+function childReviewDecision(base, mainBranch, parentBody) {
+  if (!base || base === mainBranch) return { review: true, reason: `pull request into ${mainBranch || 'the base branch'}` };
+  const n = plannedChildren(parentBody);
+  if (n === null) return { review: true, reason: 'child pull request, but the planned child count could not be read' };
+  if (n > 3) return { review: true, reason: `child pull request of a plan with ${n} children (more than three)` };
+  return { review: false, reason: `child pull request into ${base}; plan has ${n} children, so the parent is reviewed instead (D-AW)` };
+}
+
+// GET JSON from the GitHub API with the workflow token; null on any failure.
+function getJson(pathAndQuery) {
+  const token = process.env.GITHUB_TOKEN;
+  const apiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+  let url;
+  try {
+    url = new URL(`${apiBase}/${pathAndQuery}`);
+  } catch (e) {
+    return Promise.resolve(null);
+  }
+  if (url.protocol === 'http:' && process.env.FORGE_ALLOW_INSECURE_API !== '1') return Promise.resolve(null);
+  const transport = url.protocol === 'http:' ? http : https;
+  const headers = { 'User-Agent': 'forge-reviewer-clean-check', Accept: 'application/vnd.github+json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return new Promise((resolve) => {
+    const req = transport.request({
+      hostname: url.hostname, port: url.port || undefined, path: url.pathname + url.search, method: 'GET', headers,
+    }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) return resolve(null);
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+async function parentPrBody(base) {
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (!repo || !base) return null;
+  const owner = repo.split('/')[0];
+  const list = await getJson(`repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${base}`)}`);
+  if (!Array.isArray(list) || list.length !== 1) return null;
+  return typeof list[0].body === 'string' ? list[0].body : null;
+}
+
 async function skip(reason) {
   log(`skipped (${reason})`);
   await postStatus('success', `skipped: ${reason}`);
@@ -575,6 +639,13 @@ async function main() {
     return skip('GITHUB_BASE_REF not set (not a pull_request run)');
   }
 
+  const mainBranch = process.env.FORGE_BASE_BRANCH || 'main';
+  if (base !== mainBranch) {
+    const scope = childReviewDecision(base, mainBranch, await parentPrBody(base));
+    log(`review scope: ${scope.reason}`);
+    if (!scope.review) return skip(scope.reason);
+  }
+
   const baseSha = resolveBaseSha(base);
   if (!baseSha) {
     log(`could not resolve origin/${base} to a SHA`);
@@ -895,6 +966,8 @@ if (require.main === module) {
   // verifyDiffResolvedAck is exported alongside parseSummary as a test seam:
   // both are pure, and the ack gate is what decides whether a review counts.
   module.exports = {
+    plannedChildren,
+    childReviewDecision,
     parseSummary,
     verifyDiffResolvedAck,
     matchesInstructionSurface,

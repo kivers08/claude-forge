@@ -10,8 +10,59 @@ const os = require('os');
 const path = require('path');
 
 const WRITE_VERBS = /\b(cp|mv|rm|tee|install|touch|mkdir|truncate|ln|dd|chmod|chown)\b/;
-const REDIRECT = />>?/;
 const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
+// A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`), read as a full
+// shell word: quotes are removed and adjacent quoted/unquoted parts join, so
+// `> "$HOME"/.claude/x` yields `$HOME/.claude/x`. A `>` inside quotes is text,
+// not a redirect, and a descriptor dup (`2>&1`, `>&-`) has no file target,
+// while `>& file` does.
+// Only a target inside ~/.claude makes a redirect a user-level write:
+// `cat ~/.claude/x 2>/dev/null` only reads (opusjevos D-BT).
+function redirectTargets(seg) {
+  const s = String(seg || '');
+  const out = [];
+  // `bash -c "... > file"` runs its quoted argument as a shell command: read
+  // the redirects inside it too (a quoted `>` elsewhere is only text).
+  const inner = /\b(?:bash|sh|zsh|dash|ksh)\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(["'])((?:\\.|(?!\1).)*)\1/g;
+  let im;
+  while ((im = inner.exec(s)) !== null) out.push(...redirectTargets(im[2]));
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') i++;
+      continue;
+    }
+    if (ch === '\\') { i++; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch !== '>') continue;
+    let j = i + 1;
+    if (s[j] === '>' || s[j] === '|') j++;
+    // `>&N` / `>&-` duplicate a descriptor (no file); `>& file` writes a file.
+    let dup = false;
+    if (s[j] === '&') { j++; dup = true; }
+    while (s[j] === ' ' || s[j] === '\t') j++;
+    let word = '';
+    let q = null;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (q) {
+        if (c === q) { q = null; continue; }
+        if (c === '\\' && q === '"' && j + 1 < s.length) { word += s[++j]; continue; }
+        word += c;
+        continue;
+      }
+      if (c === '"' || c === "'") { q = c; continue; }
+      if (c === '\\' && j + 1 < s.length) { word += s[++j]; continue; }
+      if (/[\s;|&<>()]/.test(c)) break;
+      word += c;
+    }
+    if (word && !(dup && /^(\d+-?|-)$/.test(word))) out.push(word);
+    i = j - 1;
+  }
+  return out;
+}
 
 function homeClaudeDirs() {
   const home = os.homedir();
@@ -52,13 +103,17 @@ const REASON = 'forge user-level-write guard: ~/.claude is the human\'s machine-
 module.exports = {
   name: 'user-level-write',
   isUserLevel,
+  redirectTargets,
   reason: REASON,
   check(ctx) {
     const seg = ctx.segment;
-    if (!/\.claude/.test(seg)) return null;
-    const writes = WRITE_VERBS.test(ctx.segmentLower) || REDIRECT.test(seg) || INPLACE.test(ctx.segmentLower);
-    if (!writes) return null;
-    const targets = ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir));
+    // Redirects are read from the WHOLE command (the segment splitter treats
+    // the `&` of `>& file` as a separator) with quotes already removed, so a
+    // cosmetically quoted `.clau""de` cannot dodge a raw-text pre-check.
+    const redirected = redirectTargets(ctx.command || seg).filter((p) => isUserLevel(p, ctx.projectDir));
+    const verbWrite = /\.claude/.test(seg) && (WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower));
+    const targets = verbWrite ? ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir)) : [];
+    for (const r of redirected) if (!targets.includes(r)) targets.push(r);
     if (!targets.length) return null;
     return { deny: `${REASON} Blocked path(s): ${targets.join(', ')}.` };
   },

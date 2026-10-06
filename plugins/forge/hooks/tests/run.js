@@ -20,13 +20,19 @@
 //     "prompt": "merge",                      optional: fills {{PROMPT}} (UserPromptSubmit payloads)
 //     "toolName"/"toolInput": ...             optional: fill {{TOOL_NAME}} / {{TOOL_INPUT}} (GitHub-tool payloads)
 //     expect.dataFileAbsent / expect.fixtureFileAbsent: a file that must NOT exist (plugin data dir / fixture)
+//     expect.fixtureFileExists: a fixture file that must STILL exist (e.g. an unspent merge marker)
 //     "forgeConfig": {"merge": {...}},        optional: written to .claude/forge.json in the fixture
+//     "symlink": {"path": "...", "target": "{{OUTSIDE}}"}  optional: a symlink in the fixture (to a temp file outside it)
 //     "env": { ... },                         optional
+//     "pluginsHome": "current" | "stale",     optional: a temp CLAUDE_CONFIG_DIR whose installed_plugins.json
+//                                             lists this plugin at the marketplace clone's HEAD ("current")
+//                                             or at another commit ("stale")
 //     "expect": {
 //       "exit": 0, "stdoutEmpty": true, "stdoutIncludes": "...",
 //       "stdoutExcludes": "...", "stdoutJson": {...}, "fileExists": "smoke.log",
 //       "fileIncludes": { "file": "telemetry.jsonl", "text": "..." },
-//       "deny": true | false
+//       "deny": true | false,
+//       "maxContextBytes": 1700                additionalContext must be at most this many UTF-8 bytes
 //     }
 //   }
 //
@@ -86,6 +92,25 @@ function makeFixture(c, n) {
   return dir;
 }
 
+// A fake Claude config dir: plugins/installed_plugins.json naming this plugin,
+// and plugins/marketplaces/claude-forge as a git repo (its HEAD = "latest").
+function makePluginsHome(kind, n) {
+  const home = path.join(tmpRoot, `config-${n}`);
+  const market = path.join(home, 'plugins', 'marketplaces', 'claude-forge');
+  fs.mkdirSync(market, { recursive: true });
+  git(market, ['init', '-q', '-b', 'main']);
+  git(market, ['config', 'user.email', 'test@example.invalid']);
+  git(market, ['config', 'user.name', 'forge tests']);
+  git(market, ['commit', '-q', '--allow-empty', '-m', 'latest']);
+  const head = git(market, ['rev-parse', 'HEAD']).stdout.trim();
+  const sha = kind === 'stale' ? '0123456789abcdef0123456789abcdef01234567' : head;
+  fs.writeFileSync(path.join(home, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'forge@claude-forge': [{ scope: 'user', installPath: PLUGIN, version: '0.0.0', gitCommitSha: sha }] },
+  }));
+  return home;
+}
+
 let failed = 0;
 let ran = 0;
 
@@ -94,6 +119,18 @@ cases.forEach((c, n) => {
   ran++;
   const script = path.join(PLUGIN, c.script);
   const fixtureDir = (c.fixture || c.git) ? makeFixture(c, n) : null;
+  // "symlink": {path, target}: a symlink inside the fixture; target
+  // "{{OUTSIDE}}" is a temp file OUTSIDE the fixture holding a marker text.
+  if (fixtureDir && c.symlink) {
+    let target = c.symlink.target;
+    if (target === '{{OUTSIDE}}') {
+      target = path.join(tmpRoot, `outside-${n}.md`);
+      fs.writeFileSync(target, 'OUTSIDE-SECRET-MARKER\n');
+    }
+    const link = path.join(fixtureDir, c.symlink.path);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+  }
   if (fixtureDir && c.forgeConfig) {
     fs.mkdirSync(path.join(fixtureDir, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(fixtureDir, '.claude', 'forge.json'), JSON.stringify(c.forgeConfig));
@@ -130,10 +167,13 @@ cases.forEach((c, n) => {
     ...process.env,
     CLAUDE_PLUGIN_ROOT: PLUGIN,
     CLAUDE_PLUGIN_DATA: dataDir,
+    FORGE_GITHUB_HTTP: 'off', // no test reaches the network (lib/github-read.js)
     ...(c.env || {}),
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };
   delete env.CLAUDE_PROJECT_DIR; // payload cwd must be the only project source
+  if (c.pluginsHome) env.CLAUDE_CONFIG_DIR = makePluginsHome(c.pluginsHome, n);
+  else env.CLAUDE_CONFIG_DIR = path.join(tmpRoot, 'no-config-dir');
 
   const exp = c.expect || {};
 
@@ -151,6 +191,19 @@ cases.forEach((c, n) => {
   if (exp.exit !== undefined && r.status !== exp.exit) problems.push(`exit ${r.status} != ${exp.exit}`);
   if (exp.stdoutIncludes && !r.stdout.includes(exp.stdoutIncludes)) problems.push(`stdout lacks ${JSON.stringify(exp.stdoutIncludes)}`);
   if (exp.stdoutExcludes && r.stdout.includes(exp.stdoutExcludes)) problems.push(`stdout unexpectedly contains ${JSON.stringify(exp.stdoutExcludes)}`);
+  if (exp.maxContextBytes !== undefined) {
+    let ctxText = null;
+    try {
+      ctxText = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    } catch (e) {
+      ctxText = null;
+    }
+    if (typeof ctxText !== 'string') problems.push('maxContextBytes: stdout is not hook JSON with additionalContext');
+    else {
+      const n = Buffer.byteLength(ctxText, 'utf8');
+      if (n > exp.maxContextBytes) problems.push(`additionalContext is ${n} bytes, over ${exp.maxContextBytes}`);
+    }
+  }
   if (exp.stdoutEmpty && r.stdout.trim() !== '') problems.push(`stdout not empty: ${r.stdout.trim().slice(0, 300)}`);
   if (exp.deny !== undefined) {
     let decision = null;
@@ -178,6 +231,10 @@ cases.forEach((c, n) => {
   if (exp.fixtureFileAbsent && fixtureDir) {
     const f = path.join(c.nestedRepo ? path.join(fixtureDir, 'repo') : fixtureDir, exp.fixtureFileAbsent);
     if (fs.existsSync(f)) problems.push(`fixture file ${exp.fixtureFileAbsent} should have been consumed`);
+  }
+  if (exp.fixtureFileExists && fixtureDir) {
+    const f = path.join(c.nestedRepo ? path.join(fixtureDir, 'repo') : fixtureDir, exp.fixtureFileExists);
+    if (!fs.existsSync(f)) problems.push(`fixture file ${exp.fixtureFileExists} should still exist`);
   }
   if (exp.fileExists && !fs.existsSync(path.join(dataDir, exp.fileExists))) {
     problems.push(`expected file ${exp.fileExists} in CLAUDE_PLUGIN_DATA`);
