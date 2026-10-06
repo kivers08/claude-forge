@@ -64,6 +64,21 @@ script and put its summary line in the merge commit message. When the
 destination can't be determined at all, the gate fails **closed** (treats it
 as the base branch).
 
+Auto-merge on a child pull request is allowed as soon as it is opened when the
+parent branch's GitHub rules require a pull request and a non-empty list of
+status checks: GitHub then holds the merge until they pass. Otherwise the
+checks must already pass. Auto-merge into the base branch is never allowed.
+
+The parent pull request's title and description are the plain-English change
+report, and they become the squash message: a merge into the base branch must
+pass `commit_title` = the PR's current title (optionally with ` (#N)`) and
+`commit_message` = its current description, or it is refused
+(`merge.requireSquashMessage`). Rewrite the description first, then merge.
+
+The paid `reviewer clean` check runs on the parent pull request. It runs on
+child pull requests only when the parent PR's description says
+`Planned children: N` with N above 3 (or the count cannot be read).
+
 Limits, stated plainly: the guards read command text, so a command built to
 hide the marker name or the destination can evade them. Real enforcement is
 GitHub branch protection on the base branch; the guards stop the ordinary

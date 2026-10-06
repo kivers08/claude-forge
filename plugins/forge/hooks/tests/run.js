@@ -153,6 +153,7 @@ cases.forEach((c, n) => {
     ...process.env,
     CLAUDE_PLUGIN_ROOT: PLUGIN,
     CLAUDE_PLUGIN_DATA: dataDir,
+    FORGE_GITHUB_HTTP: 'off', // no test reaches the network (lib/github-read.js)
     ...(c.env || {}),
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };

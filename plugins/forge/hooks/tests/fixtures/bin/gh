@@ -6,11 +6,26 @@
 //   gh pr list ... -q .[].number    prints $FAKE_GH_OPEN_PRS (comma list, default "7"), one per line
 //   gh pr checks N --json name,bucket   prints a JSON array steered by
 //     $FAKE_GH_CHECKS = pass (default) | fail | pending | none | unreadable
+//   gh api repos/<o>/<r>/pulls/<n>     prints {title: $FAKE_GH_PR_TITLE ("Fake title"),
+//     body: $FAKE_GH_PR_BODY ("Fake body"), base: {ref: $FAKE_GH_BASE_REF}}
+//   gh api repos/<o>/<r>/rules/branches/<b>   prints $FAKE_GH_RULES (JSON, default "[]")
 // $FAKE_GH_FAIL makes every call exit 1 (gh missing / no network). Any other
 // invocation exits 1 with nothing on stdout. Defaults mean tests that never set
 // these see the same behavior as before the merge-control work.
 const args = process.argv.slice(2);
 if (process.env.FAKE_GH_FAIL) process.exit(1);
+if (args[0] === 'api' && /^repos\/[^/]+\/[^/]+\/pulls\/\d+$/.test(args[1] || '')) {
+  process.stdout.write(JSON.stringify({
+    title: process.env.FAKE_GH_PR_TITLE === undefined ? 'Fake title' : process.env.FAKE_GH_PR_TITLE,
+    body: process.env.FAKE_GH_PR_BODY === undefined ? 'Fake body' : process.env.FAKE_GH_PR_BODY,
+    base: { ref: process.env.FAKE_GH_BASE_REF || 'main' },
+  }));
+  process.exit(0);
+}
+if (args[0] === 'api' && /\/rules\/branches\//.test(args[1] || '')) {
+  process.stdout.write(process.env.FAKE_GH_RULES || '[]');
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'view' && args.includes('number')) {
   process.stdout.write((process.env.FAKE_GH_PR_NUMBER || '7') + '\n');
   process.exit(0);
