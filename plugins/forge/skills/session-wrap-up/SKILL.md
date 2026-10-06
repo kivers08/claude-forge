@@ -114,7 +114,27 @@ Compare each task file's line count against `taskFiles.caps` (lessons, todo,
 sprint, spoke). If a file is over cap, that's a signal more demotion or
 consolidation is needed — report it even if you don't fix it in this pass.
 
-## 7. Report
+## 7. Hubs and the handoff note (when `.claude/forge.json` has `hubs`)
+
+Hub-and-spoke memory (opusjevos D-BN, formats in the plugin's
+`templates/formats.md`) replaces the hand-written `## Index` lines above for
+every file listed under `hubs.files`:
+
+1. Write each new decision or lesson as a **spoke entry**:
+   `### <ID> | <YYYY-MM-DD> | <1-3 labels> | <one sentence>` plus detail.
+   Labels only from the repo's labels file; never edit a hub by hand.
+2. Rebuild and check, from the repository root:
+   `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" build` then `... check`.
+   A refused build lists the bad entries; fix them, do not skip the step.
+3. Rewrite the handoff note (`taskFiles.handoff`) to the handoff template:
+   where things stand, next, watch out, pointers. Keep the first 25 lines
+   self-sufficient (session start injects only those) and set
+   `forge_version:` in its YAML header to the forge version named on this
+   session's `forge <version> (<commit>) loaded` line, after the conflict
+   check (if it was due) has been reported.
+4. Commit the spokes, hubs and handoff together.
+
+## 8. Report
 
 Summarize: what MEMORY PROPOSALs were committed and where (and which were
 skipped, with the reason — `excludeFromWrite`, duplicate, or `propose: no`),

@@ -1,0 +1,4 @@
+{
+  "taskFiles": { "handoff": "docs/handoff.md", "injectionBudget": 8192 },
+  "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] }
+}

@@ -283,6 +283,50 @@
     "fixture": "fixtures/tasks", "pluginsHome": "stale",
     "expect": { "exit": 0, "stdoutIncludes": "forge WARNING: OUT OF DATE", "fileIncludes": { "file": "telemetry.jsonl", "text": "\"forge_commit\":\"0123456789abcdef" } } },
 
+  { "name": "session-start: injects the handoff head and the hub index",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutIncludes": "Hub line number 40", "stdoutExcludes": "not injected" } },
+
+  { "name": "session-start: no source is reported as skipped when all fit",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
+
+  { "name": "session-start: handoff top is injected",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutIncludes": "HANDOFF-STANDING-MARKER" } },
+
+  { "name": "session-start: a differing forge_version (with a trailing YAML comment) asks for the conflict check",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutIncludes": "forge version changed since the last session (docs/handoff.md says 0.0.1" } },
+
+  { "name": "session-start: a hub over budget is cut to its newest lines, not dropped",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "docs/handoff.md", "injectionBudget": 2200 }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
+    "expect": { "exit": 0, "stdoutIncludes": "older line(s) not injected", "stdoutExcludes": "Hub line number 1 " } },
+
+  { "name": "session-start: total injected context stays within a small byte budget",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "injectionBudget": 1500 }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
+    "expect": { "exit": 0, "stdoutIncludes": "older line(s) not injected", "maxContextBytes": 1700 } },
+
+  { "name": "session-start: a hub too big for even one line is listed as not injected",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "injectionBudget": 300 }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
+    "expect": { "exit": 0, "stdoutIncludes": "docs/decisions-hub.md (over injectionBudget)" } },
+
+  { "name": "session-start: a lessons key pointing at a hub spoke is not reported as skipped",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "docs/handoff.md", "lessons": "docs/decisions.md" }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
+    "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
+
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
     "git": true, "branch": "feat/x", "dirty": ["src/app.js"],
