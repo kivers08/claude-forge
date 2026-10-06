@@ -22,6 +22,9 @@
 //     expect.dataFileAbsent / expect.fixtureFileAbsent: a file that must NOT exist (plugin data dir / fixture)
 //     "forgeConfig": {"merge": {...}},        optional: written to .claude/forge.json in the fixture
 //     "env": { ... },                         optional
+//     "pluginsHome": "current" | "stale",     optional: a temp CLAUDE_CONFIG_DIR whose installed_plugins.json
+//                                             lists this plugin at the marketplace clone's HEAD ("current")
+//                                             or at another commit ("stale")
 //     "expect": {
 //       "exit": 0, "stdoutEmpty": true, "stdoutIncludes": "...",
 //       "stdoutExcludes": "...", "stdoutJson": {...}, "fileExists": "smoke.log",
@@ -86,6 +89,25 @@ function makeFixture(c, n) {
   return dir;
 }
 
+// A fake Claude config dir: plugins/installed_plugins.json naming this plugin,
+// and plugins/marketplaces/claude-forge as a git repo (its HEAD = "latest").
+function makePluginsHome(kind, n) {
+  const home = path.join(tmpRoot, `config-${n}`);
+  const market = path.join(home, 'plugins', 'marketplaces', 'claude-forge');
+  fs.mkdirSync(market, { recursive: true });
+  git(market, ['init', '-q', '-b', 'main']);
+  git(market, ['config', 'user.email', 'test@example.invalid']);
+  git(market, ['config', 'user.name', 'forge tests']);
+  git(market, ['commit', '-q', '--allow-empty', '-m', 'latest']);
+  const head = git(market, ['rev-parse', 'HEAD']).stdout.trim();
+  const sha = kind === 'stale' ? '0123456789abcdef0123456789abcdef01234567' : head;
+  fs.writeFileSync(path.join(home, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    version: 2,
+    plugins: { 'forge@claude-forge': [{ scope: 'user', installPath: PLUGIN, version: '0.0.0', gitCommitSha: sha }] },
+  }));
+  return home;
+}
+
 let failed = 0;
 let ran = 0;
 
@@ -134,6 +156,8 @@ cases.forEach((c, n) => {
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };
   delete env.CLAUDE_PROJECT_DIR; // payload cwd must be the only project source
+  if (c.pluginsHome) env.CLAUDE_CONFIG_DIR = makePluginsHome(c.pluginsHome, n);
+  else env.CLAUDE_CONFIG_DIR = path.join(tmpRoot, 'no-config-dir');
 
   const exp = c.expect || {};
 

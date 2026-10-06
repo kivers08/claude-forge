@@ -10,8 +10,51 @@ const os = require('os');
 const path = require('path');
 
 const WRITE_VERBS = /\b(cp|mv|rm|tee|install|touch|mkdir|truncate|ln|dd|chmod|chown)\b/;
-const REDIRECT = />>?/;
 const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
+// A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`), read as a full
+// shell word: quotes are removed and adjacent quoted/unquoted parts join, so
+// `> "$HOME"/.claude/x` yields `$HOME/.claude/x`. A `>` inside quotes is text,
+// not a redirect, and a descriptor dup (`2>&1`, `>&-`) has no file target.
+// Only a target inside ~/.claude makes a redirect a user-level write:
+// `cat ~/.claude/x 2>/dev/null` only reads (opusjevos D-BT).
+function redirectTargets(seg) {
+  const s = String(seg || '');
+  const out = [];
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') i++;
+      continue;
+    }
+    if (ch === '\\') { i++; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch !== '>') continue;
+    let j = i + 1;
+    if (s[j] === '>' || s[j] === '|') j++;
+    if (s[j] === '&') { i = j; continue; } // fd dup, no file
+    while (s[j] === ' ' || s[j] === '\t') j++;
+    let word = '';
+    let q = null;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (q) {
+        if (c === q) { q = null; continue; }
+        if (c === '\\' && q === '"' && j + 1 < s.length) { word += s[++j]; continue; }
+        word += c;
+        continue;
+      }
+      if (c === '"' || c === "'") { q = c; continue; }
+      if (c === '\\' && j + 1 < s.length) { word += s[++j]; continue; }
+      if (/[\s;|&<>()]/.test(c)) break;
+      word += c;
+    }
+    if (word) out.push(word);
+    i = j - 1;
+  }
+  return out;
+}
 
 function homeClaudeDirs() {
   const home = os.homedir();
@@ -52,13 +95,15 @@ const REASON = 'forge user-level-write guard: ~/.claude is the human\'s machine-
 module.exports = {
   name: 'user-level-write',
   isUserLevel,
+  redirectTargets,
   reason: REASON,
   check(ctx) {
     const seg = ctx.segment;
     if (!/\.claude/.test(seg)) return null;
-    const writes = WRITE_VERBS.test(ctx.segmentLower) || REDIRECT.test(seg) || INPLACE.test(ctx.segmentLower);
-    if (!writes) return null;
-    const targets = ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir));
+    const redirected = redirectTargets(seg).filter((p) => isUserLevel(p, ctx.projectDir));
+    const verbWrite = WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower);
+    const targets = verbWrite ? ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir)) : [];
+    for (const r of redirected) if (!targets.includes(r)) targets.push(r);
     if (!targets.length) return null;
     return { deny: `${REASON} Blocked path(s): ${targets.join(', ')}.` };
   },

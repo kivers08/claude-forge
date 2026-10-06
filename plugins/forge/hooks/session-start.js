@@ -8,6 +8,10 @@
 // files (D6). Everything emitted is charged against taskFiles.injectionBudget
 // bytes; past the budget, files are named but not quoted.
 //
+// The first line is always "forge <version> (<commit>) loaded" (lib/version.js),
+// plus an OUT OF DATE warning when the marketplace clone is ahead of the
+// installed commit: a session must say which forge it runs (opusjevos D-W).
+//
 // Modes: `index` (the ## Index section), `open-items` (unchecked checkboxes),
 // `head-N` (first N lines). Default when unset: `index`, except `todo`, whose
 // documented exception is `open-items`.
@@ -15,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const io = require('./lib/io');
 const cfg = require('./lib/config');
+const version = require('./lib/version');
 
 const DEFAULT_BUDGET = 8192;
 const DEFAULT_MODES = { lessons: 'index', todo: 'open-items', sprint: 'index' };
@@ -63,6 +68,13 @@ function main() {
   const { config, error } = cfg.load(projectDir);
 
   const lines = [];
+  let ver = null;
+  try {
+    ver = version.info();
+    lines.push(...version.lines(ver));
+  } catch (e) {
+    lines.push('forge WARNING: the forge version could not be determined. Say so to the human.');
+  }
   const major = Number((process.version.match(/^v(\d+)/) || [])[1] || 0);
   if (major < 20) {
     lines.push(`forge WARNING: node ${process.version} is below the required 20 (D11). Hooks may misbehave.`);
@@ -114,6 +126,8 @@ function main() {
     source: payload.source || null,
     bytes_injected: used,
     node: process.version,
+    forge_version: ver ? ver.version : null,
+    forge_commit: ver ? ver.commit : null,
   });
 
   if (!lines.length) return;
