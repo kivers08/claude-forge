@@ -68,5 +68,16 @@ test('merge settings hidden from the reader are "cannot verify", not conflicts',
   assert(!has(r, 'does not allow squash'), 'no false conflict');
 });
 
+test('classic branch protection on main is "cannot verify", not "no rules"', () => {
+  const r = evaluate(GOOD_REPO, { main: [], mainClassic: true, parent: GOOD_PARENT, child: [] }, FORGE_CHECKS);
+  assert(has(r, 'classic branch protection') && !has(r, 'no "require a pull request"'), r.findings.join(' / '));
+});
+
+test('an option value is never taken as the repository', () => {
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath, [require.resolve('../github-rules'), '--parent', 'feature/x'], { encoding: 'utf8' });
+  assert(r.status === 2 && r.stderr.includes('usage'), `exit ${r.status}: ${r.stderr}`);
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

@@ -232,6 +232,9 @@ function cmdBuild(root) {
   const a = analyse(root);
   if (a.error) return fail(2, a.error);
   if (a.problems.length) return fail(1, `hub build refused, fix these first:\n${a.problems.map((p) => `  ${p}`).join('\n')}`);
+  // Check every hub target first, then write: a bad second hub must not
+  // leave the first one already rewritten.
+  const targets = [];
   for (const h of a.hubs) {
     const file = inRepo(root, h.rel, 'hub');
     let isLink = false;
@@ -240,7 +243,10 @@ function cmdBuild(root) {
     } catch (e) {
       isLink = false;
     }
-    if (isLink) return fail(2, `hub ${h.rel} is a symlink; refusing to write through it`);
+    if (isLink) return fail(2, `hub ${h.rel} is a symlink; refusing to write through it (nothing written)`);
+    targets.push({ h, file });
+  }
+  for (const { h, file } of targets) {
     const before = readText(file);
     if (before !== h.text) {
       fs.mkdirSync(path.dirname(file), { recursive: true });

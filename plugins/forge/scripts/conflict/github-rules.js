@@ -59,7 +59,9 @@ function checkNames(rules) {
 }
 
 // Pure comparison. repo = GET /repos/o/r; branches = { main, parent, child }
-// each the GET /repos/o/r/rules/branches/<b> array (or null if unread).
+// each the GET /repos/o/r/rules/branches/<b> array (or null if unread), plus
+// mainClassic: true when the base branch is protected by classic branch
+// protection (which the rules endpoint does not show).
 function evaluate(repo, branches, expect) {
   const want = expect || {};
   const f = [];
@@ -80,7 +82,11 @@ function evaluate(repo, branches, expect) {
     if (repo.allow_squash_merge && !repo.allow_merge_commit && !repo.allow_rebase_merge) ok.push('squash only');
   }
   const main = branches.main;
-  if (main) {
+  if (main && !main.length && branches.mainClassic) {
+    // rules/branches returns RULESETS only; classic branch protection is
+    // separate and its details need admin access.
+    f.push('Main uses classic branch protection, not rulesets; its details need admin access, so PR, squash and check rules on main cannot be verified here.');
+  } else if (main) {
     const pr = ruleOf(main, 'pull_request');
     if (!pr) f.push('Main has no "require a pull request" rule.');
     else {
@@ -155,7 +161,9 @@ function main(argv) {
     const r = apiGet(`repos/${slug}/rules/branches/${encodeURIComponent(b)}`);
     return r.error || !Array.isArray(r.data) ? null : r.data;
   };
+  const baseInfo = apiGet(`repos/${slug}/branches/${encodeURIComponent(base)}`);
   const branches = {
+    mainClassic: !!(baseInfo.data && baseInfo.data.protected),
     main: read(base),
     parent: read(opt('--parent', 'feature/conflict-check-probe')),
     child: read(opt('--child', 'claude/conflict-check-probe')),
