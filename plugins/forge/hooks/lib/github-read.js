@@ -37,8 +37,9 @@ function apiGet(path, cwd) {
   return c.status === 0 ? parse(c.stdout) : null;
 }
 
+// The branch is ONE path parameter: feature/x -> feature%2Fx.
 function encodeBranch(b) {
-  return String(b).split('/').map(encodeURIComponent).join('/');
+  return encodeURIComponent(String(b));
 }
 
 // { title, body, base } of a pull request, or null.
