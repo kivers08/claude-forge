@@ -167,7 +167,7 @@ function hubLine(e) {
 }
 
 function renderHub(hubRel, spokes, entries) {
-  const newest = entries.length ? sortNewest(entries)[0].date : '';
+  const newest = entries.length ? sortNewest(entries)[0].date : new Date().toISOString().slice(0, 10);
   return [
     '---',
     `id: ${path.basename(hubRel, '.md')}`,
@@ -299,7 +299,10 @@ function main(argv) {
   const rest = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--root') root = path.resolve(args[++i] || '.');
-    else if (args[i] === '--limit') limit = Math.max(1, Number(args[++i]) || 10);
+    else if (args[i] === '--limit') {
+      limit = Number(args[++i]);
+      if (!Number.isInteger(limit) || limit < 1) return fail(2, '--limit needs a whole number of 1 or more');
+    }
     else if (args[i] === '--hub') hubSel = args[++i] || null;
     else rest.push(args[i]);
   }

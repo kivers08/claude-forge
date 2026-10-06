@@ -288,6 +288,11 @@
     "fixture": "fixtures/hubs",
     "expect": { "exit": 0, "stdoutIncludes": "Hub line number 40", "stdoutExcludes": "not injected" } },
 
+  { "name": "session-start: no source is reported as skipped when all fit",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
+
   { "name": "session-start: handoff top is injected",
     "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
     "fixture": "fixtures/hubs",

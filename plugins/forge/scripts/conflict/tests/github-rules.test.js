@@ -62,5 +62,11 @@ test('unreadable main, parent or child rules are findings, never a pass', () => 
   assert(has(evaluate(GOOD_REPO, { main: GOOD_MAIN, parent: GOOD_PARENT, child: null }, FORGE_CHECKS), 'cannot be verified'), 'null child');
 });
 
+test('merge settings hidden from the reader are "cannot verify", not conflicts', () => {
+  const r = evaluate({ default_branch: 'main' }, { main: GOOD_MAIN, parent: GOOD_PARENT, child: [] }, FORGE_CHECKS);
+  assert(has(r, 'cannot be verified'), r.findings.join(' / '));
+  assert(!has(r, 'does not allow squash'), 'no false conflict');
+});
+
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

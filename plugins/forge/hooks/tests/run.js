@@ -177,14 +177,17 @@ cases.forEach((c, n) => {
   if (exp.stdoutIncludes && !r.stdout.includes(exp.stdoutIncludes)) problems.push(`stdout lacks ${JSON.stringify(exp.stdoutIncludes)}`);
   if (exp.stdoutExcludes && r.stdout.includes(exp.stdoutExcludes)) problems.push(`stdout unexpectedly contains ${JSON.stringify(exp.stdoutExcludes)}`);
   if (exp.maxContextBytes !== undefined) {
-    let ctxText = '';
+    let ctxText = null;
     try {
-      ctxText = JSON.parse(r.stdout).hookSpecificOutput.additionalContext || '';
+      ctxText = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     } catch (e) {
-      ctxText = '';
+      ctxText = null;
     }
-    const n = Buffer.byteLength(ctxText, 'utf8');
-    if (n > exp.maxContextBytes) problems.push(`additionalContext is ${n} bytes, over ${exp.maxContextBytes}`);
+    if (typeof ctxText !== 'string') problems.push('maxContextBytes: stdout is not hook JSON with additionalContext');
+    else {
+      const n = Buffer.byteLength(ctxText, 'utf8');
+      if (n > exp.maxContextBytes) problems.push(`additionalContext is ${n} bytes, over ${exp.maxContextBytes}`);
+    }
   }
   if (exp.stdoutEmpty && r.stdout.trim() !== '') problems.push(`stdout not empty: ${r.stdout.trim().slice(0, 300)}`);
   if (exp.deny !== undefined) {

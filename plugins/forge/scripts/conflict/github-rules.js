@@ -64,7 +64,12 @@ function evaluate(repo, branches, expect) {
   const want = expect || {};
   const f = [];
   const ok = [];
-  if (repo) {
+  const MERGE_FIELDS = ['allow_squash_merge', 'allow_merge_commit', 'allow_rebase_merge', 'allow_auto_merge'];
+  if (repo && MERGE_FIELDS.some((k) => typeof repo[k] !== 'boolean')) {
+    // GitHub shows these only to callers with push/admin access: absent means
+    // unknown, never "off".
+    f.push('Repository merge settings are not visible to this reader (needs push/admin access), so squash-only, the squash message and auto-merge cannot be verified.');
+  } else if (repo) {
     if (repo.allow_merge_commit) f.push('Repository allows merge commits; decisions say squash only (D32, D-BC).');
     if (repo.allow_rebase_merge) f.push('Repository allows rebase merges; decisions say squash only.');
     if (!repo.allow_squash_merge) f.push('Repository does not allow squash merges; decisions require them.');
@@ -120,13 +125,21 @@ function evaluate(repo, branches, expect) {
 
 function main(argv) {
   const args = argv.slice(2);
-  const slug = args.find((a) => /^[\w.-]+\/[\w.-]+$/.test(a));
+  // The repository is the first argument that is neither an option nor an
+  // option's value (`--parent feature/x` must not be read as a repo).
+  const WITH_VALUE = new Set(['--parent', '--child', '--checks', '--parent-checks']);
+  let slug = null;
+  for (let i = 0; i < args.length; i++) {
+    if (WITH_VALUE.has(args[i])) { i++; continue; }
+    if (args[i].startsWith('--')) continue;
+    if (/^[\w.-]+\/[\w.-]+$/.test(args[i])) { slug = args[i]; break; }
+  }
   const opt = (name, dflt) => {
     const i = args.indexOf(name);
     return i === -1 ? dflt : args[i + 1];
   };
   if (!slug) {
-    console.error('usage: github-rules.js <owner/repo> [--parent feature/x] [--child claude/x] [--json]');
+    console.error('usage: github-rules.js <owner/repo> [--checks "a,b"] [--parent-checks "a,b"] [--parent feature/x] [--child claude/x] [--json]');
     return 2;
   }
   const repoRes = apiGet(`repos/${slug}`);
@@ -159,4 +172,4 @@ function main(argv) {
 }
 
 if (require.main === module) process.exitCode = main(process.argv);
-else module.exports = { evaluate, checkNames, FORGE_CHECKS };
+else module.exports = { evaluate, checkNames, FORGE_CHECKS, main };
