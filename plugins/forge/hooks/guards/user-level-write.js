@@ -10,7 +10,22 @@ const os = require('os');
 const path = require('path');
 
 const WRITE_VERBS = /\b(cp|mv|rm|tee|install|touch|mkdir|truncate|ln|dd|chmod|chown)\b/;
-const REDIRECT = />>?/;
+// A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`). A descriptor dup
+// (`2>&1`, `>&-`) has no file target. Only a target inside ~/.claude makes a
+// redirect a user-level write: `cat ~/.claude/x 2>/dev/null` only reads (D-BT).
+const REDIRECT_TARGET = /\d*&?>>?\|?\s*(&\d*-?|"[^"]*"|'[^']*'|[^\s;|&<>]+)/g;
+
+function redirectTargets(seg) {
+  const out = [];
+  let m;
+  REDIRECT_TARGET.lastIndex = 0;
+  while ((m = REDIRECT_TARGET.exec(seg)) !== null) {
+    const t = m[1];
+    if (!t || t.startsWith('&')) continue;
+    out.push(t.replace(/^(["'])(.*)\1$/, '$2'));
+  }
+  return out;
+}
 const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
 
 function homeClaudeDirs() {
@@ -52,13 +67,15 @@ const REASON = 'forge user-level-write guard: ~/.claude is the human\'s machine-
 module.exports = {
   name: 'user-level-write',
   isUserLevel,
+  redirectTargets,
   reason: REASON,
   check(ctx) {
     const seg = ctx.segment;
     if (!/\.claude/.test(seg)) return null;
-    const writes = WRITE_VERBS.test(ctx.segmentLower) || REDIRECT.test(seg) || INPLACE.test(ctx.segmentLower);
-    if (!writes) return null;
-    const targets = ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir));
+    const redirected = redirectTargets(seg).filter((p) => isUserLevel(p, ctx.projectDir));
+    const verbWrite = WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower);
+    const targets = verbWrite ? ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir)) : [];
+    for (const r of redirected) if (!targets.includes(r)) targets.push(r);
     if (!targets.length) return null;
     return { deny: `${REASON} Blocked path(s): ${targets.join(', ')}.` };
   },

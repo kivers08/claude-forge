@@ -1,7 +1,6 @@
 {
   "enabledPlugins": {
-    "forge@claude-forge": true,
-    "smoke@claude-forge": true
+    "forge@claude-forge": true
   },
   "extraKnownMarketplaces": {
     "claude-forge": {

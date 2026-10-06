@@ -85,6 +85,26 @@
     "command": "cat ~/.claude/settings.json",
     "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
 
+  { "name": "user-level-write: a read with stderr to /dev/null is not a write",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cat ~/.claude/settings.json 2>/dev/null",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "user-level-write: listing ~/.claude into a temp file is not a user-level write",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "ls ~/.claude/plugins > /tmp/plugins.txt 2>&1",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "user-level-write: append into a quoted $HOME/.claude path is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x >> \"$HOME/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: stderr redirected into ~/.claude is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "node build.js 2>~/.claude/build.log",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",
@@ -239,9 +259,19 @@
     "fixture": "fixtures/tasks",
     "expect": { "exit": 0, "stdoutIncludes": "Express middleware" } },
 
-  { "name": "session-start: wsl path with no config stays quiet",
+  { "name": "session-start: wsl path with no config still names the forge version",
     "script": "hooks/session-start.js", "payload": "payloads/session-start-wsl.json",
-    "expect": { "exit": 0, "stdoutEmpty": true } },
+    "expect": { "exit": 0, "stdoutIncludes": "loaded", "stdoutExcludes": "Task files" } },
+
+  { "name": "session-start: version line names the installed commit",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/tasks", "pluginsHome": "current",
+    "expect": { "exit": 0, "stdoutIncludes": "loaded.", "stdoutExcludes": "OUT OF DATE" } },
+
+  { "name": "session-start: warns loudly when the marketplace is ahead of the installed commit",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/tasks", "pluginsHome": "stale",
+    "expect": { "exit": 0, "stdoutIncludes": "forge WARNING: OUT OF DATE", "fileIncludes": { "file": "telemetry.jsonl", "text": "\"forge_commit\":\"0123456789abcdef" } } },
 
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",

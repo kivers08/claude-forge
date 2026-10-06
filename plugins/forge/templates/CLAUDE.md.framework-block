@@ -69,6 +69,17 @@ hide the marker name or the destination can evade them. Real enforcement is
 GitHub branch protection on the base branch; the guards stop the ordinary
 and the accidental routes.
 
+### Session start: say which forge is running
+
+forge's SessionStart context always begins with the line
+`forge <version> (<commit>) loaded`. If that line is missing, or a
+`forge WARNING` line follows it (out of date, commit unreadable), the FIRST
+thing said to the human in the session is that forge is not loaded or out of
+date, and how to fix it: the environment setup script
+(`templates/env-setup-script.sh` in the plugin) reinstalls forge when its
+commit is behind, and the fix takes effect in a new session. Never work on
+silently with a missing or stale forge.
+
 ### Configuration
 
 See `forge.md` (written alongside `.claude/forge.json` by `/forge:bootstrap`)
