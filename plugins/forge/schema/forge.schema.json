@@ -177,7 +177,7 @@
         },
         "requireSquashMessage": {
           "type": "boolean",
-          "description": "Default true. A merge into the base branch through the GitHub tool must pass commit_title = the PR's current title (optionally with ' (#N)') and commit_message = its current description, which is the change report (opusjevos D-BC). An unreadable PR denies."
+          "description": "Default true. A merge into the base branch through the GitHub tool must pass commit_title = the PR's current title (optionally with ' (#N)') and commit_message = its current description, which is the change report (opusjevos D-BC). A PR that cannot be read (for example a private repository with gh logged out) is never merged silently: denied where no approval prompt reaches the human, otherwise a one-tap approval that carries the warning, even when a merge marker exists."
         }
       }
     },

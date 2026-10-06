@@ -21,6 +21,11 @@ const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
 function redirectTargets(seg) {
   const s = String(seg || '');
   const out = [];
+  // `bash -c "... > file"` runs its quoted argument as a shell command: read
+  // the redirects inside it too (a quoted `>` elsewhere is only text).
+  const inner = /\b(?:bash|sh|zsh|dash|ksh)\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+(["'])((?:\\.|(?!\1).)*)\1/g;
+  let im;
+  while ((im = inner.exec(s)) !== null) out.push(...redirectTargets(im[2]));
   let quote = null;
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];

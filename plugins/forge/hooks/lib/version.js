@@ -29,7 +29,7 @@ function readJson(file) {
 function gitHead(dir) {
   try {
     if (!fs.statSync(path.join(dir, '.git'))) return null;
-    const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' });
+    const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', timeout: 5000 });
     const sha = r.status === 0 ? r.stdout.trim() : '';
     return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
   } catch (e) {

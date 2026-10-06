@@ -125,6 +125,11 @@
     "command": "cat ~/.claude/settings.json >&2; cat ~/.claude/x >&-",
     "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
 
+  { "name": "user-level-write: a redirect inside bash -c into ~/.claude is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "bash -c \"echo x > ~/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",
@@ -465,6 +470,7 @@
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: base merge whose title differs is denied", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_PR_TITLE": "Another title"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "commit_title must be the PR title"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: base merge is denied when the PR cannot be read", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "could not be read"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: an unreadable PR (private repo, gh logged out) asks where an ask reaches the human, with the warning", "permissionMode": "default", "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": false, "stdoutIncludes": "squash message cannot be checked"}},
+  {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: an unreadable PR is never merged silently, even with a fresh marker (asks, marker kept)", "permissionMode": "default", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": false, "stdoutIncludes": "\"permissionDecision\":\"ask\"", "fixtureFileExists": ".git/claude-human-merge-ok"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "merge", "name": "D-BC: an unreadable PR never lets a NON-squash merge through the ask", "permissionMode": "default", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "squash-merges only"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "fallback: gh pr view fails but the API read finds a child PR's parent", "env": {"FAKE_GH_PR_VIEW_FAIL": "1", "FAKE_GH_BASE_REF": "feature/session-start", "FAKE_GH_PR_BODY": "different"}, "expect": {"exit": 0, "deny": false, "stdoutEmpty": true}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: squash message rule can be switched off in config", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_PR_BODY": "different"}, "forgeConfig": {"merge": {"requireSquashMessage": false}}, "expect": {"exit": 0, "deny": false, "stdoutEmpty": true}},
