@@ -38,13 +38,19 @@ function apiGet(path, cwd) {
 }
 
 // The branch is ONE path parameter: feature/x -> feature%2Fx.
+const SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+function validSlug(slug) {
+  return typeof slug === 'string' && SLUG.test(slug) && !slug.split('/').some((p) => p === '.' || p === '..');
+}
+
 function encodeBranch(b) {
   return encodeURIComponent(String(b));
 }
 
 // { title, body, base } of a pull request, or null.
 function pullRequest(slug, number, cwd) {
-  if (!slug || !Number.isFinite(Number(number))) return null;
+  if (!validSlug(slug) || !Number.isFinite(Number(number))) return null;
   const j = apiGet(`repos/${slug}/pulls/${Number(number)}`, cwd);
   if (!j || typeof j !== 'object' || typeof j.title !== 'string') return null;
   return { title: j.title, body: typeof j.body === 'string' ? j.body : '', base: j.base && j.base.ref ? j.base.ref : null };
@@ -52,7 +58,7 @@ function pullRequest(slug, number, cwd) {
 
 // The active rules on a branch (array), or null when unreadable.
 function branchRules(slug, branch, cwd) {
-  if (!slug || !branch) return null;
+  if (!validSlug(slug) || !branch) return null;
   const j = apiGet(`repos/${slug}/rules/branches/${encodeBranch(branch)}`, cwd);
   return Array.isArray(j) ? j : null;
 }
@@ -68,4 +74,4 @@ function branchRequiresChecks(rules) {
   return pr && list.length > 0;
 }
 
-module.exports = { apiGet, pullRequest, branchRules, branchRequiresChecks };
+module.exports = { apiGet, pullRequest, branchRules, branchRequiresChecks, validSlug };

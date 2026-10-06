@@ -48,7 +48,7 @@ function main() {
   } else {
     // Checked BEFORE the marker gate, so a refused message never uses up the
     // human's single-use marker.
-    verdict = squashMessageVerdict(config, input, slug, pullNumber, projectDir, base);
+    verdict = squashMessageVerdict(config, input, slug, pullNumber, projectDir, base, payload);
   }
   if (!verdict && !(targetBranch && targetBranch !== base)) {
     verdict = guard.checkMerge({ config, projectDir, payload, dataDir }, {
@@ -76,13 +76,17 @@ function norm(t) {
   return String(t === undefined || t === null ? '' : t).replace(/\r\n/g, '\n').trim();
 }
 
-function squashMessageVerdict(config, input, slug, pullNumber, projectDir, base) {
+function squashMessageVerdict(config, input, slug, pullNumber, projectDir, base, payload) {
   if (cfg.get(config, 'merge.requireSquashMessage', true) !== true) return null;
   const n = Number(pullNumber);
   const pr = githubRead.pullRequest(slug, n, projectDir);
   const head = `forge merge-gate guard: merging PR #${Number.isFinite(n) ? n : '?'} into ${base} `;
   if (!pr) {
-    return { deny: `${head}is blocked because the pull request's title and description could not be read, so the squash message cannot be checked (D-BC). Retry; if it repeats, tell the human.` };
+    // A private repository with gh logged out cannot be read at all; where an
+    // approval reaches the human, ask instead of making every merge impossible.
+    const why = 'the pull request\'s title and description could not be read, so the squash message cannot be checked (D-BC)';
+    if (mc.mayAsk(config, payload)) return { ask: `${head}: ${why}. Approve only if the squash message is the PR's current title and description.` };
+    return { deny: `${head}is blocked because ${why}. Retry; if it repeats, tell the human.` };
   }
   const title = norm(input.commit_title);
   const okTitle = title === norm(pr.title) || title === `${norm(pr.title)} (#${n})`;
