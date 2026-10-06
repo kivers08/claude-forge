@@ -207,6 +207,10 @@ jobs:
     permissions:
       contents: read
       statuses: write
+      # Read-only: reviewer-clean-check.js reads the parent PR's
+      # "Planned children: N" line to decide whether a child PR is reviewed
+      # (opusjevos D-AW/D-AX).
+      pull-requests: read
     # Defense in depth alongside reviewer-clean-check.js's own internal
     # spawnSync timeout: this job runs on the single self-hosted runner, so
     # an unbounded hang here would block every other CI job on that runner.
