@@ -14,7 +14,15 @@
 //
 // Modes: `index` (the ## Index section), `open-items` (unchecked checkboxes),
 // `head-N` (first N lines). Default when unset: `index`, except `todo`, whose
-// documented exception is `open-items`.
+// documented exception is `open-items`, and `handoff` (`head-25`).
+//
+// Hubs (`hubs.files`, opusjevos D-BN): each hub's ## Index is injected after
+// the to-dos and the handoff. An Index that does not fit the remaining budget
+// is cut to its first (newest) lines with a notice, instead of being dropped.
+//
+// Conflict-check trigger (opusjevos D-BM): when the handoff's YAML header
+// carries `forge_version` and it differs from the running forge, say so: the
+// conflict check runs before other work, then wrap-up records the new version.
 const fs = require('fs');
 const path = require('path');
 const io = require('./lib/io');
@@ -22,7 +30,10 @@ const cfg = require('./lib/config');
 const version = require('./lib/version');
 
 const DEFAULT_BUDGET = 8192;
-const DEFAULT_MODES = { lessons: 'index', todo: 'open-items', sprint: 'index' };
+const DEFAULT_MODES = { lessons: 'index', todo: 'open-items', sprint: 'index', handoff: 'head-25' };
+// Injection priority when the budget runs short (opusjevos D-BN): open
+// to-dos, the top of the handoff note, the hubs, then lessons and sprint.
+const ORDER = ['todo', 'handoff', 'lessons', 'sprint'];
 
 function readFileSafe(file) {
   try {
@@ -52,6 +63,30 @@ function sliceOpenItems(text) {
 
 function sliceHead(text, n) {
   return text.split('\n').slice(0, n).join('\n').trim() || null;
+}
+
+// The YAML header's `key: value` (first block only, flat keys).
+function yamlField(text, key) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
+  if (!m) return null;
+  const line = m[1].split(/\r?\n/).find((l) => l.startsWith(`${key}:`));
+  return line ? line.slice(key.length + 1).trim().replace(/^["']|["']$/g, '') || null : null;
+}
+
+// Cut an index body to the lines that fit `room` bytes (index lines are newest
+// first by the hub contract). Returns null when not even one line fits.
+function fitLines(body, room) {
+  const all = body.split('\n');
+  const kept = [];
+  let size = 0;
+  for (const l of all) {
+    if (size + l.length + 1 > room) break;
+    kept.push(l);
+    size += l.length + 1;
+  }
+  if (!kept.length) return null;
+  const left = all.length - kept.length;
+  return { text: kept.join('\n'), left };
 }
 
 function sliceFor(mode, text) {
@@ -92,7 +127,7 @@ function main() {
   const budget = cfg.get(config, 'taskFiles.injectionBudget', DEFAULT_BUDGET);
 
   const named = [];
-  for (const key of ['lessons', 'todo', 'sprint']) {
+  for (const key of ORDER) {
     const rel = taskFiles && taskFiles[key];
     if (typeof rel !== 'string' || !rel) continue;
     const cap = caps && caps[key];
@@ -103,18 +138,45 @@ function main() {
   const decisionsLog = cfg.get(config, 'taskFiles.decisionsLog', null);
   if (decisionsLog) lines.push(`Decisions log: ${decisionsLog}`);
 
+  const handoffRel = taskFiles && typeof taskFiles.handoff === 'string' ? taskFiles.handoff : null;
+  if (handoffRel && ver && ver.version) {
+    const seen = yamlField(readFileSafe(path.join(projectDir, handoffRel)), 'forge_version');
+    if (seen && seen !== ver.version) {
+      lines.push(`forge version changed since the last session (${handoffRel} says ${seen}, running ${ver.version}). `
+        + 'Run the conflict check (/forge:conflict-check) before other work, and tell the human its result in the first reply; '
+        + `session wrap-up then records forge_version: ${ver.version} in the handoff.`);
+    }
+  }
+
+  const hubFiles = cfg.get(config, 'hubs.files', []);
+  const sources = [];
+  const addKey = (key) => {
+    const rel = taskFiles && taskFiles[key];
+    if (typeof rel === 'string' && rel) sources.push({ rel, mode: (modes && modes[key]) || DEFAULT_MODES[key] || 'index' });
+  };
+  addKey('todo');
+  addKey('handoff');
+  for (const h of Array.isArray(hubFiles) ? hubFiles : []) {
+    if (h && typeof h.hub === 'string' && h.hub) sources.push({ rel: h.hub, mode: 'index', hub: true });
+  }
+  addKey('lessons');
+  addKey('sprint');
+
   let used = lines.join('\n').length;
   const skipped = [];
-  for (const key of ['lessons', 'todo', 'sprint']) {
-    const rel = taskFiles && taskFiles[key];
-    if (typeof rel !== 'string' || !rel) continue;
+  for (const src of sources) {
+    const { rel, mode } = src;
     const text = readFileSafe(path.join(projectDir, rel));
     if (text === null) { skipped.push(`${rel} (missing)`); continue; }
-    const mode = (modes && modes[key]) || DEFAULT_MODES[key] || 'index';
     const body = sliceFor(mode, text);
     if (!body) { skipped.push(`${rel} (no ${mode} content)`); continue; }
-    const block = `\n\n${rel} [${mode}]:\n${body}`;
-    if (used + block.length > budget) { skipped.push(`${rel} (over injectionBudget)`); continue; }
+    const head = `\n\n${rel} [${src.hub ? 'hub index, newest first' : mode}]:\n`;
+    let block = head + body;
+    if (used + block.length > budget) {
+      const fit = src.hub ? fitLines(body, budget - used - head.length - 120) : null;
+      if (!fit) { skipped.push(`${rel} (over injectionBudget)`); continue; }
+      block = `${head}${fit.text}\n(${fit.left} older line(s) not injected: grep ${rel} or run the hub script's find <label>.)`;
+    }
     used += block.length;
     lines.push(block.trim());
   }

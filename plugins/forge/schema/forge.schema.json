@@ -32,6 +32,10 @@
           "type": "string",
           "description": "Repo-relative path to the sprint file."
         },
+        "handoff": {
+          "type": "string",
+          "description": "Repo-relative path to the handoff note (formats.md handoff template). Injected head-first (default mode head-25). Its YAML header's forge_version, when it differs from the running forge, makes session start ask for the conflict check (opusjevos D-BM)."
+        },
         "spokesDir": {
           "type": "string",
           "description": "Repo-relative directory holding hand-rolled per-agent memory spokes (kept alongside native agent memory for one release, D4)."
@@ -83,6 +87,39 @@
         "auditsDir": {
           "type": "string",
           "description": "Repo-relative directory where audit and audit-framework reports are written."
+        }
+      }
+    },
+    "hubs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Hub-and-spoke memory (opusjevos D-BN, D-BO). Spoke files hold entries headed '### <ID> | <YYYY-MM-DD> | <1-3 labels> | <one sentence>'; the forge hub script (scripts/hub/hub.js) rebuilds each hub's '## Index' from its spokes, newest first, and rejects labels not in the labels file. Session start injects each hub's Index within injectionBudget.",
+      "properties": {
+        "labels": {
+          "type": "string",
+          "description": "Repo-relative path to labels.md: the 12 standard labels plus this repo's own, one '- <label>: <meaning>' line each. Only listed labels are allowed."
+        },
+        "files": {
+          "type": "array",
+          "description": "One item per hub.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "One hub: the generated file and the spoke files it indexes.",
+            "required": ["hub", "spokes"],
+            "properties": {
+              "hub": {
+                "type": "string",
+                "description": "Repo-relative path of the generated hub file."
+              },
+              "spokes": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string" },
+                "description": "Repo-relative paths of the spoke files this hub indexes."
+              }
+            }
+          }
         }
       }
     },

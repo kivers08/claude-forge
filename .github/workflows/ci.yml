@@ -99,6 +99,10 @@ jobs:
         run: node scripts/tests/changelog.test.js
       - name: test/CI digest unit tests
         run: node plugins/forge/scripts/digest/tests/digest.test.js
+      - name: hub script unit tests (hub-and-spoke memory)
+        run: node plugins/forge/scripts/hub/tests/hub.test.js
+      - name: conflict-check GitHub rules unit tests
+        run: node plugins/forge/scripts/conflict/tests/github-rules.test.js
       # Slowest deterministic steps last, so a cheap failure never pays for
       # them. `run.js` alone is ~3s — roughly half the suite's total work.
       - name: Hook unit runs (forge)
