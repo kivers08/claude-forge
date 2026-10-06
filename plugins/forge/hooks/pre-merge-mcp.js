@@ -50,6 +50,11 @@ function main() {
     // human's single-use marker.
     verdict = squashMessageVerdict(config, input, slug, pullNumber, projectDir, base, payload);
   }
+  let unverified = null;
+  if (verdict && verdict.defer) {
+    unverified = verdict.defer;
+    verdict = null;
+  }
   if (!verdict && !(targetBranch && targetBranch !== base)) {
     verdict = guard.checkMerge({ config, projectDir, payload, dataDir }, {
       what: `merging PR #${pullNumber || '?'} through the GitHub MCP server`,
@@ -62,6 +67,7 @@ function main() {
       targetBranch,
     });
   }
+  if (verdict && verdict.ask && unverified) verdict.ask += ` Also: ${unverified}; approve only if the squash message is the PR's current title and description.`;
   if (!verdict) return;
   emit(verdict, payload, dataDir);
 }
@@ -82,10 +88,12 @@ function squashMessageVerdict(config, input, slug, pullNumber, projectDir, base,
   const pr = githubRead.pullRequest(slug, n, projectDir);
   const head = `forge merge-gate guard: merging PR #${Number.isFinite(n) ? n : '?'} into ${base} `;
   if (!pr) {
-    // A private repository with gh logged out cannot be read at all; where an
-    // approval reaches the human, ask instead of making every merge impossible.
+    // A private repository with gh logged out cannot be read at all. Where an
+    // approval reaches the human, do not decide here: the normal merge gate
+    // (marker, squash-only) still runs, and its ask carries this warning.
+    // An early ask must never stand in for the gate's checks.
     const why = 'the pull request\'s title and description could not be read, so the squash message cannot be checked (D-BC)';
-    if (mc.mayAsk(config, payload)) return { ask: `${head}: ${why}. Approve only if the squash message is the PR's current title and description.` };
+    if (mc.mayAsk(config, payload)) return { defer: why };
     return { deny: `${head}is blocked because ${why}. Retry; if it repeats, tell the human.` };
   }
   const title = norm(input.commit_title);
