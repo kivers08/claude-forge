@@ -15,6 +15,10 @@ set -u
 
 log() { echo "FORGE-SETUP: $*"; }
 
+# The same config tree the claude CLI uses (CLAUDE_CONFIG_DIR, else ~/.claude).
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+export CONFIG_DIR
+
 if ! command -v claude >/dev/null 2>&1; then
   log "FAILED: claude CLI not on PATH during setup"
   exit 2
@@ -29,17 +33,21 @@ claude plugin marketplace update claude-forge || { log "FAILED: marketplace upda
 # PR 25), so a commit mismatch means reinstall.
 installed_sha() {
   node -e '
-    const f = require("os").homedir() + "/.claude/plugins/installed_plugins.json";
+    const f = process.env.CONFIG_DIR + "/plugins/installed_plugins.json";
     try {
       const e = (JSON.parse(require("fs").readFileSync(f, "utf8")).plugins["forge@claude-forge"] || [])[0] || {};
       process.stdout.write(String(e.gitCommitSha || ""));
     } catch (err) {}
   ' 2>/dev/null
 }
-latest=$(git -C "$HOME/.claude/plugins/marketplaces/claude-forge" rev-parse HEAD 2>/dev/null || true)
+latest=$(git -C "$CONFIG_DIR/plugins/marketplaces/claude-forge" rev-parse HEAD 2>/dev/null || true)
+if [ -z "$latest" ]; then
+  log "FAILED: could not read the marketplace's latest commit in $CONFIG_DIR/plugins/marketplaces/claude-forge"
+  exit 8
+fi
 
 if claude plugin list 2>/dev/null | grep -q 'forge@claude-forge'; then
-  if [ -n "$latest" ] && [ "$(installed_sha)" != "$latest" ]; then
+  if [ "$(installed_sha)" != "$latest" ]; then
     log "installed forge is not the latest commit; reinstalling"
     claude plugin uninstall forge@claude-forge >/dev/null 2>&1 || { log "FAILED: forge uninstall"; exit 4; }
     claude plugin install forge@claude-forge || { log "FAILED: forge reinstall"; exit 5; }
@@ -47,11 +55,11 @@ if claude plugin list 2>/dev/null | grep -q 'forge@claude-forge'; then
 else
   claude plugin install forge@claude-forge || { log "FAILED: forge install"; exit 5; }
 fi
-[ -n "$latest" ] && [ "$(installed_sha)" != "$latest" ] && { log "FAILED: forge is still not at the latest commit"; exit 7; }
+[ "$(installed_sha)" != "$latest" ] && { log "FAILED: forge is still not at the latest commit"; exit 7; }
 
 # Report what is installed (version + commit), for the start-of-session check.
 info=$(node -e '
-  const f = require("os").homedir() + "/.claude/plugins/installed_plugins.json";
+  const f = process.env.CONFIG_DIR + "/plugins/installed_plugins.json";
   const e = (JSON.parse(require("fs").readFileSync(f, "utf8")).plugins["forge@claude-forge"] || [])[0] || {};
   process.stdout.write((e.version || "?") + " (" + String(e.gitCommitSha || "?").slice(0, 7) + ")");
 ' 2>/dev/null) || info="unknown"

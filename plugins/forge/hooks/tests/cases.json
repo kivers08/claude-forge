@@ -105,6 +105,16 @@
     "command": "node build.js 2>~/.claude/build.log",
     "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
 
+  { "name": "user-level-write: redirect to a partly quoted \"$HOME\"/.claude path is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x > \"$HOME\"/.claude/settings.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: a > inside quoted text is not a redirect",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "printf %s \"echo > ~/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",

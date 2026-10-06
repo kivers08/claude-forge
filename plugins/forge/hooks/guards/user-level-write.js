@@ -10,23 +10,51 @@ const os = require('os');
 const path = require('path');
 
 const WRITE_VERBS = /\b(cp|mv|rm|tee|install|touch|mkdir|truncate|ln|dd|chmod|chown)\b/;
-// A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`). A descriptor dup
-// (`2>&1`, `>&-`) has no file target. Only a target inside ~/.claude makes a
-// redirect a user-level write: `cat ~/.claude/x 2>/dev/null` only reads (D-BT).
-const REDIRECT_TARGET = /\d*&?>>?\|?\s*(&\d*-?|"[^"]*"|'[^']*'|[^\s;|&<>]+)/g;
-
+const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
+// A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`), read as a full
+// shell word: quotes are removed and adjacent quoted/unquoted parts join, so
+// `> "$HOME"/.claude/x` yields `$HOME/.claude/x`. A `>` inside quotes is text,
+// not a redirect, and a descriptor dup (`2>&1`, `>&-`) has no file target.
+// Only a target inside ~/.claude makes a redirect a user-level write:
+// `cat ~/.claude/x 2>/dev/null` only reads (opusjevos D-BT).
 function redirectTargets(seg) {
+  const s = String(seg || '');
   const out = [];
-  let m;
-  REDIRECT_TARGET.lastIndex = 0;
-  while ((m = REDIRECT_TARGET.exec(seg)) !== null) {
-    const t = m[1];
-    if (!t || t.startsWith('&')) continue;
-    out.push(t.replace(/^(["'])(.*)\1$/, '$2'));
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"') i++;
+      continue;
+    }
+    if (ch === '\\') { i++; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch !== '>') continue;
+    let j = i + 1;
+    if (s[j] === '>' || s[j] === '|') j++;
+    if (s[j] === '&') { i = j; continue; } // fd dup, no file
+    while (s[j] === ' ' || s[j] === '\t') j++;
+    let word = '';
+    let q = null;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (q) {
+        if (c === q) { q = null; continue; }
+        if (c === '\\' && q === '"' && j + 1 < s.length) { word += s[++j]; continue; }
+        word += c;
+        continue;
+      }
+      if (c === '"' || c === "'") { q = c; continue; }
+      if (c === '\\' && j + 1 < s.length) { word += s[++j]; continue; }
+      if (/[\s;|&<>()]/.test(c)) break;
+      word += c;
+    }
+    if (word) out.push(word);
+    i = j - 1;
   }
   return out;
 }
-const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
 
 function homeClaudeDirs() {
   const home = os.homedir();
