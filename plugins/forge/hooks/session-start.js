@@ -35,6 +35,23 @@ const DEFAULT_MODES = { lessons: 'index', todo: 'open-items', sprint: 'index', h
 // to-dos, the top of the handoff note, the hubs, then lessons and sprint.
 const ORDER = ['todo', 'handoff', 'lessons', 'sprint'];
 
+// A configured file must stay inside the project: no "..", no absolute path,
+// no symlink leading out. Anything else is never read (it would be injected
+// into the session verbatim).
+function insideProject(projectDir, rel) {
+  try {
+    if (typeof rel !== 'string' || !rel || path.isAbsolute(rel)) return null;
+    const root = fs.realpathSync(projectDir);
+    const abs = path.resolve(root, rel);
+    const inside = (x) => x === root || x.startsWith(root + path.sep);
+    if (!inside(abs)) return null;
+    if (fs.existsSync(abs) && !inside(fs.realpathSync(abs))) return null;
+    return abs;
+  } catch (e) {
+    return null;
+  }
+}
+
 function readFileSafe(file) {
   try {
     return fs.readFileSync(file, 'utf8');
@@ -142,7 +159,8 @@ function main() {
 
   const handoffRel = taskFiles && typeof taskFiles.handoff === 'string' ? taskFiles.handoff : null;
   if (handoffRel && ver && ver.version) {
-    const seen = yamlField(readFileSafe(path.join(projectDir, handoffRel)), 'forge_version');
+    const handoffAbs = insideProject(projectDir, handoffRel);
+    const seen = handoffAbs ? yamlField(readFileSafe(handoffAbs), 'forge_version') : null;
     if (seen && seen !== ver.version) {
       lines.push(`forge version changed since the last session (${handoffRel} says ${seen}, running ${ver.version}). `
         + 'Run the conflict check (/forge:conflict-check) before other work, and tell the human its result in the first reply; '
@@ -179,7 +197,9 @@ function main() {
   const skipped = [];
   for (const src of sources) {
     const { rel, mode } = src;
-    const text = readFileSafe(path.join(projectDir, rel));
+    const abs = insideProject(projectDir, rel);
+    if (!abs) { skipped.push(`${rel} (outside the project, not read)`); continue; }
+    const text = readFileSafe(abs);
     if (text === null) { skipped.push(`${rel} (missing)`); continue; }
     const body = sliceFor(mode, text);
     if (!body) { skipped.push(`${rel} (no ${mode} content)`); continue; }
@@ -206,7 +226,10 @@ function main() {
   });
 
   if (!lines.length) return;
-  io.context(`forge session context (project ${projectDir}):\n${lines.join('\n')}`, 'SessionStart');
+  // The version line is the very first line of the context (framework block:
+  // "forge's SessionStart context always begins with ..."), then the wrapper.
+  const first = lines.length && /^forge .* loaded/.test(lines[0]) ? lines.shift() : null;
+  io.context(`${first ? `${first}\n` : ''}forge session context (project ${projectDir}):\n${lines.join('\n')}`, 'SessionStart');
 }
 
 try {

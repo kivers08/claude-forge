@@ -115,6 +115,16 @@
     "command": "printf %s \"echo > ~/.claude/settings.json\"",
     "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
 
+  { "name": "user-level-write: >& to a file inside ~/.claude is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x >& \"$HOME/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: >&2 and >&- are descriptor dups, not files",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cat ~/.claude/settings.json >&2; cat ~/.claude/x >&-",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",
@@ -326,6 +336,17 @@
     "fixture": "fixtures/hubs",
     "forgeConfig": { "taskFiles": { "handoff": "docs/handoff.md", "lessons": "docs/decisions.md" }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
     "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
+
+  { "name": "session-start: the forge version is the very first line of the context",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutIncludes": "\"additionalContext\":\"forge 0.3.0 (" } },
+
+  { "name": "session-start: a handoff path outside the project is never read",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "../../../../etc/hostname" } },
+    "expect": { "exit": 0, "stdoutIncludes": "outside the project, not read" } },
 
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",

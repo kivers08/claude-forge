@@ -95,18 +95,18 @@ date, and how to fix it: the environment setup script
 commit is behind, and the fix takes effect in a new session. Never work on
 silently with a missing or stale forge.
 
-**First reply: a two-line status.** Claude's first reply in a session starts
-with two plain lines before anything else: (1) where things stand, (2) what is
-next, both taken from the injected handoff note and to-dos. Any warning from
-session start follows on its own line: forge missing or out of date, or
-"forge version changed" (then the conflict check, `/forge:conflict-check`,
-runs before other work and its result is reported).
+**First reply: warnings, then a two-line status.** Claude's first reply in a
+session opens with any session-start warning (forge missing or out of date,
+as above), then two plain lines: (1) where things stand, (2) what is next,
+both taken from the injected handoff note and to-dos. When session start says
+"forge version changed", the conflict check (`/forge:conflict-check`) runs
+before other work and its result follows the two lines.
 
 **Memory: hub and spokes (when `.claude/forge.json` has `hubs`).** Session
 start injects each hub's index (newest lines first, within the byte budget),
 the open to-dos and the top of the handoff note. Read nothing else whole. For
 detail, grep the entry ID or run the hub script's `find <label>`
-(`scripts/hub/hub.js`). When dispatching a helper agent, pass it only the few
+(`node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" find <label>`). When dispatching a helper agent, pass it only the few
 matching entries; helpers never read the hub or whole memory files. Formats:
 `templates/formats.md`. New entries are written as spoke entries and the hub
 is rebuilt by the script, never edited by hand.

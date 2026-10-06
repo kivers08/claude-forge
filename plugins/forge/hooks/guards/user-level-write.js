@@ -14,7 +14,8 @@ const INPLACE = /\b(sed|perl|awk)\b[^|;]*\s-i\b/;
 // A redirect's TARGET (`> f`, `>> f`, `2> f`, `&> f`, `>| f`), read as a full
 // shell word: quotes are removed and adjacent quoted/unquoted parts join, so
 // `> "$HOME"/.claude/x` yields `$HOME/.claude/x`. A `>` inside quotes is text,
-// not a redirect, and a descriptor dup (`2>&1`, `>&-`) has no file target.
+// not a redirect, and a descriptor dup (`2>&1`, `>&-`) has no file target,
+// while `>& file` does.
 // Only a target inside ~/.claude makes a redirect a user-level write:
 // `cat ~/.claude/x 2>/dev/null` only reads (opusjevos D-BT).
 function redirectTargets(seg) {
@@ -33,7 +34,9 @@ function redirectTargets(seg) {
     if (ch !== '>') continue;
     let j = i + 1;
     if (s[j] === '>' || s[j] === '|') j++;
-    if (s[j] === '&') { i = j; continue; } // fd dup, no file
+    // `>&N` / `>&-` duplicate a descriptor (no file); `>& file` writes a file.
+    let dup = false;
+    if (s[j] === '&') { j++; dup = true; }
     while (s[j] === ' ' || s[j] === '\t') j++;
     let word = '';
     let q = null;
@@ -50,7 +53,7 @@ function redirectTargets(seg) {
       if (/[\s;|&<>()]/.test(c)) break;
       word += c;
     }
-    if (word) out.push(word);
+    if (word && !(dup && /^(\d+-?|-)$/.test(word))) out.push(word);
     i = j - 1;
   }
   return out;
@@ -100,7 +103,9 @@ module.exports = {
   check(ctx) {
     const seg = ctx.segment;
     if (!/\.claude/.test(seg)) return null;
-    const redirected = redirectTargets(seg).filter((p) => isUserLevel(p, ctx.projectDir));
+    // Redirects are read from the WHOLE command: the segment splitter treats
+    // the `&` of `>& file` as a separator, which would hide the target.
+    const redirected = redirectTargets(ctx.command || seg).filter((p) => isUserLevel(p, ctx.projectDir));
     const verbWrite = WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower);
     const targets = verbWrite ? ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir)) : [];
     for (const r of redirected) if (!targets.includes(r)) targets.push(r);

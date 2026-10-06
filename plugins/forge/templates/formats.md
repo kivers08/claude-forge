@@ -32,12 +32,12 @@ forge; a difference triggers the conflict check.
   `### <ID> | <YYYY-MM-DD> | <1-3 labels> | <one sentence>`
   followed by as much detail as needed. IDs never change (`D-BO`, `L-042`).
 - A **hub** is generated from its spokes by the forge hub script
-  (`scripts/hub/hub.js build`); never edit it by hand. One line per entry,
+  (`node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" build`); never edit it by hand. One line per entry,
   newest first: `- <date> | <labels> | <one sentence> | <spoke-file>#<ID>`.
 - Labels come only from the repo's `labels.md` (template: `labels.md` in
   this folder). The hub script refuses unknown labels.
 - Session start loads the hub (newest lines first, within the byte budget).
-  To get detail, grep the ID or run `hub.js find <label>`; pass helper agents
+  To get detail, grep the ID or run `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" find <label>`; pass helper agents
   only the matching entries, never the whole hub or spoke file.
 
 ## 3. Templates by document type
