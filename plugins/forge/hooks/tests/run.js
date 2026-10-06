@@ -20,6 +20,7 @@
 //     "prompt": "merge",                      optional: fills {{PROMPT}} (UserPromptSubmit payloads)
 //     "toolName"/"toolInput": ...             optional: fill {{TOOL_NAME}} / {{TOOL_INPUT}} (GitHub-tool payloads)
 //     expect.dataFileAbsent / expect.fixtureFileAbsent: a file that must NOT exist (plugin data dir / fixture)
+//     expect.fixtureFileExists: a fixture file that must STILL exist (e.g. an unspent merge marker)
 //     "forgeConfig": {"merge": {...}},        optional: written to .claude/forge.json in the fixture
 //     "env": { ... },                         optional
 //     "pluginsHome": "current" | "stale",     optional: a temp CLAUDE_CONFIG_DIR whose installed_plugins.json
@@ -153,6 +154,7 @@ cases.forEach((c, n) => {
     ...process.env,
     CLAUDE_PLUGIN_ROOT: PLUGIN,
     CLAUDE_PLUGIN_DATA: dataDir,
+    FORGE_GITHUB_HTTP: 'off', // no test reaches the network (lib/github-read.js)
     ...(c.env || {}),
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
   };
@@ -216,6 +218,10 @@ cases.forEach((c, n) => {
   if (exp.fixtureFileAbsent && fixtureDir) {
     const f = path.join(c.nestedRepo ? path.join(fixtureDir, 'repo') : fixtureDir, exp.fixtureFileAbsent);
     if (fs.existsSync(f)) problems.push(`fixture file ${exp.fixtureFileAbsent} should have been consumed`);
+  }
+  if (exp.fixtureFileExists && fixtureDir) {
+    const f = path.join(c.nestedRepo ? path.join(fixtureDir, 'repo') : fixtureDir, exp.fixtureFileExists);
+    if (!fs.existsSync(f)) problems.push(`fixture file ${exp.fixtureFileExists} should still exist`);
   }
   if (exp.fileExists && !fs.existsSync(path.join(dataDir, exp.fileExists))) {
     problems.push(`expected file ${exp.fileExists} in CLAUDE_PLUGIN_DATA`);

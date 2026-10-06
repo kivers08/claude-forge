@@ -173,7 +173,11 @@
         },
         "requireChildTests": {
           "type": "boolean",
-          "description": "Default true. A pull request into a NON-base branch (a child unit into its parent) merges only when its checks all pass. Failing or still-running checks deny; no checks or unreadable checks ask or deny, never pass."
+          "description": "Default true. A pull request into a NON-base branch (a child unit into its parent) merges only when its checks all pass. Failing or still-running checks deny; no checks or unreadable checks ask or deny, never pass. Auto-merge on a child PR is allowed at once when the parent branch's GitHub rules require a pull request and a non-empty list of status checks, since GitHub then holds the merge until they pass (opusjevos D-BH)."
+        },
+        "requireSquashMessage": {
+          "type": "boolean",
+          "description": "Default true. A merge into the base branch through the GitHub tool must pass commit_title = the PR's current title (optionally with ' (#N)') and commit_message = its current description, which is the change report (opusjevos D-BC). An unreadable PR denies."
         }
       }
     },

@@ -99,6 +99,8 @@ jobs:
         run: node scripts/tests/changelog.test.js
       - name: test/CI digest unit tests
         run: node plugins/forge/scripts/digest/tests/digest.test.js
+      - name: github-read lib unit tests (merge guards' GitHub lookups)
+        run: node plugins/forge/hooks/tests/github-read.test.js
       - name: hub script unit tests (hub-and-spoke memory)
         run: node plugins/forge/scripts/hub/tests/hub.test.js
       - name: conflict-check GitHub rules unit tests
@@ -207,6 +209,10 @@ jobs:
     permissions:
       contents: read
       statuses: write
+      # Read-only: reviewer-clean-check.js reads the parent PR's
+      # "Planned children: N" line to decide whether a child PR is reviewed
+      # (opusjevos D-AW/D-AX).
+      pull-requests: read
     # Defense in depth alongside reviewer-clean-check.js's own internal
     # spawnSync timeout: this job runs on the single self-hosted runner, so
     # an unbounded hang here would block every other CI job on that runner.
@@ -251,6 +257,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          # The repository's real base branch, so a PR into it is never
+          # treated as a child PR (D-AW reviewer scope).
+          FORGE_BASE_BRANCH: ${{ github.event.repository.default_branch }}
           # Point the base-ref copy (which lives outside the workspace) at the
           # real checkout for its git calls, the diff file, and --add-dir.
           FORGE_REPO_ROOT: ${{ github.workspace }}

@@ -4,5 +4,5 @@
   "permission_mode": "{{MODE}}",
   "hook_event_name": "PreToolUse",
   "tool_name": "mcp__github__merge_pull_request",
-  "tool_input": { "owner": "kivers08", "repo": "claude-forge", "pullNumber": 7, "merge_method": "{{COMMAND}}" }
+  "tool_input": { "owner": "kivers08", "repo": "claude-forge", "pullNumber": 7, "merge_method": "{{COMMAND}}", "commit_title": "Fake title (#7)", "commit_message": "Fake body" }
 }

@@ -25,6 +25,7 @@ const { spawnSync } = require('child_process');
 const { get } = require('../lib/config');
 const { hasUnquotedSequence, subcommandAfter } = require('../lib/segment-split');
 const mc = require('../lib/merge-control');
+const githubRead = require('../lib/github-read');
 
 // Resolves the PR's base ref (the branch it merges INTO) via `gh pr view`.
 // Returns null when it cannot be determined — caller treats null as "assume
@@ -40,9 +41,14 @@ function resolvePrBaseBranch(cwd, identifier, slug) {
   } catch (e) {
     return null;
   }
-  if (!r || r.status !== 0 || !r.stdout) return null;
-  const branch = r.stdout.trim();
-  return branch || null;
+  const branch = r && r.status === 0 && r.stdout ? r.stdout.trim() : '';
+  if (branch) return branch;
+  // gh missing or logged out (cloud sessions): read the PR over the API.
+  if (slug && identifier && /^\d+$/.test(String(identifier))) {
+    const pr = githubRead.pullRequest(slug, Number(identifier), cwd);
+    if (pr && pr.base) return pr.base;
+  }
+  return null;
 }
 
 // The PR's number via `gh pr view` when the merge named it by branch or
