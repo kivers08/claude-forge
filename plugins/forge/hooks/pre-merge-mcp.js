@@ -50,10 +50,14 @@ function main() {
     // human's single-use marker.
     verdict = squashMessageVerdict(config, input, slug, pullNumber, projectDir, base, payload);
   }
-  let unverified = null;
+  // An unreadable PR is never merged silently, not even with a fresh marker:
+  // non-squash is denied as usual, anything else becomes an ask carrying the
+  // warning (the marker is left unused).
   if (verdict && verdict.defer) {
-    unverified = verdict.defer;
-    verdict = null;
+    const why = verdict.defer;
+    verdict = (method !== 'squash' && cfg.get(config, 'git.squashOnly', true) === true)
+      ? { deny: 'forge merge-gate guard: this repository squash-merges only. Re-run with merge_method "squash".' }
+      : { ask: `forge merge-gate: merging PR #${pullNumber || '?'} would change ${base}, and ${why}. Approve only if the human asked for this merge and the squash message is the PR's current title and description.` };
   }
   if (!verdict && !(targetBranch && targetBranch !== base)) {
     verdict = guard.checkMerge({ config, projectDir, payload, dataDir }, {
@@ -67,7 +71,6 @@ function main() {
       targetBranch,
     });
   }
-  if (verdict && verdict.ask && unverified) verdict.ask += ` Also: ${unverified}; approve only if the squash message is the PR's current title and description.`;
   if (!verdict) return;
   emit(verdict, payload, dataDir);
 }

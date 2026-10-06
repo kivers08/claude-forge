@@ -67,7 +67,7 @@ an existing configured project.
    plugin's `templates/labels.md` (the 12 standard labels; ask the human for
    this repo's own labels), a `hubs` block in `.claude/forge.json`, the
    decisions/lessons spoke files and a handoff note in the formats of
-   `templates/formats.md`, then `scripts/hub/hub.js build` to create the hubs.
+   `templates/formats.md`, then `node "${CLAUDE_PLUGIN_ROOT}/scripts/hub/hub.js" build` to create the hubs.
    Also hand the human `templates/env-setup-script.sh` for the cloud
    environment's Setup script box.
 

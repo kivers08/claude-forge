@@ -115,6 +115,26 @@
     "command": "printf %s \"echo > ~/.claude/settings.json\"",
     "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
 
+  { "name": "user-level-write: >& to a file inside ~/.claude is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x >& \"$HOME/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: >&2 and >&- are descriptor dups, not files",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "cat ~/.claude/settings.json >&2; cat ~/.claude/x >&-",
+    "expect": { "exit": 0, "deny": false, "stdoutEmpty": true } },
+
+  { "name": "user-level-write: a redirect inside bash -c into ~/.claude is denied",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "bash -c \"echo x > ~/.claude/settings.json\"",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
+  { "name": "user-level-write: cosmetic quotes inside the path do not dodge the redirect check",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x >& \"$HOME\"/.clau\"\"de/settings.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",
@@ -327,6 +347,29 @@
     "forgeConfig": { "taskFiles": { "handoff": "docs/handoff.md", "lessons": "docs/decisions.md" }, "hubs": { "labels": "labels.md", "files": [{ "hub": "docs/decisions-hub.md", "spokes": ["docs/decisions.md"] }] } },
     "expect": { "exit": 0, "stdoutExcludes": "Not injected" } },
 
+  { "name": "session-start: the forge version is the very first line of the context",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "expect": { "exit": 0, "stdoutIncludes": "\"additionalContext\":\"forge 0.3.0 (" } },
+
+  { "name": "session-start: a handoff path outside the project is never read",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "../../../../etc/hostname" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: ../../../../etc/hostname. Do NOT read" } },
+
+  { "name": "session-start: an absolute handoff path is refused",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "/etc/hostname" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: /etc/hostname" } },
+
+  { "name": "session-start: a handoff symlinked to a file outside the project is refused, its text never injected",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs", "symlink": { "path": "docs/escape.md", "target": "{{OUTSIDE}}" },
+    "forgeConfig": { "taskFiles": { "handoff": "docs/escape.md" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: docs/escape.md", "stdoutExcludes": "OUTSIDE-SECRET-MARKER" } },
+
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
     "git": true, "branch": "feat/x", "dirty": ["src/app.js"],
@@ -444,6 +487,7 @@
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: base merge whose title differs is denied", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_PR_TITLE": "Another title"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "commit_title must be the PR title"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: base merge is denied when the PR cannot be read", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "could not be read"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: an unreadable PR (private repo, gh logged out) asks where an ask reaches the human, with the warning", "permissionMode": "default", "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": false, "stdoutIncludes": "squash message cannot be checked"}},
+  {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: an unreadable PR is never merged silently, even with a fresh marker (asks, marker kept)", "permissionMode": "default", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": false, "stdoutIncludes": "\"permissionDecision\":\"ask\"", "fixtureFileExists": ".git/claude-human-merge-ok"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "merge", "name": "D-BC: an unreadable PR never lets a NON-squash merge through the ask", "permissionMode": "default", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_FAIL": "1"}, "expect": {"exit": 0, "deny": true, "stdoutIncludes": "squash-merges only"}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "fallback: gh pr view fails but the API read finds a child PR's parent", "env": {"FAKE_GH_PR_VIEW_FAIL": "1", "FAKE_GH_BASE_REF": "feature/session-start", "FAKE_GH_PR_BODY": "different"}, "expect": {"exit": 0, "deny": false, "stdoutEmpty": true}},
   {"script": "hooks/pre-merge-mcp.js", "payload": "payloads/pre-merge-mcp.json", "git": true, "command": "squash", "name": "D-BC: squash message rule can be switched off in config", "mergeMarkerMinutes": 2, "env": {"FAKE_GH_PR_BODY": "different"}, "forgeConfig": {"merge": {"requireSquashMessage": false}}, "expect": {"exit": 0, "deny": false, "stdoutEmpty": true}},
