@@ -22,6 +22,7 @@
 //     expect.dataFileAbsent / expect.fixtureFileAbsent: a file that must NOT exist (plugin data dir / fixture)
 //     expect.fixtureFileExists: a fixture file that must STILL exist (e.g. an unspent merge marker)
 //     "forgeConfig": {"merge": {...}},        optional: written to .claude/forge.json in the fixture
+//     "symlink": {"path": "...", "target": "{{OUTSIDE}}"}  optional: a symlink in the fixture (to a temp file outside it)
 //     "env": { ... },                         optional
 //     "pluginsHome": "current" | "stale",     optional: a temp CLAUDE_CONFIG_DIR whose installed_plugins.json
 //                                             lists this plugin at the marketplace clone's HEAD ("current")
@@ -118,6 +119,18 @@ cases.forEach((c, n) => {
   ran++;
   const script = path.join(PLUGIN, c.script);
   const fixtureDir = (c.fixture || c.git) ? makeFixture(c, n) : null;
+  // "symlink": {path, target}: a symlink inside the fixture; target
+  // "{{OUTSIDE}}" is a temp file OUTSIDE the fixture holding a marker text.
+  if (fixtureDir && c.symlink) {
+    let target = c.symlink.target;
+    if (target === '{{OUTSIDE}}') {
+      target = path.join(tmpRoot, `outside-${n}.md`);
+      fs.writeFileSync(target, 'OUTSIDE-SECRET-MARKER\n');
+    }
+    const link = path.join(fixtureDir, c.symlink.path);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+  }
   if (fixtureDir && c.forgeConfig) {
     fs.mkdirSync(path.join(fixtureDir, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(fixtureDir, '.claude', 'forge.json'), JSON.stringify(c.forgeConfig));

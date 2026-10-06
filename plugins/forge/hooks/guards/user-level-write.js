@@ -107,11 +107,11 @@ module.exports = {
   reason: REASON,
   check(ctx) {
     const seg = ctx.segment;
-    if (!/\.claude/.test(seg)) return null;
-    // Redirects are read from the WHOLE command: the segment splitter treats
-    // the `&` of `>& file` as a separator, which would hide the target.
+    // Redirects are read from the WHOLE command (the segment splitter treats
+    // the `&` of `>& file` as a separator) with quotes already removed, so a
+    // cosmetically quoted `.clau""de` cannot dodge a raw-text pre-check.
     const redirected = redirectTargets(ctx.command || seg).filter((p) => isUserLevel(p, ctx.projectDir));
-    const verbWrite = WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower);
+    const verbWrite = /\.claude/.test(seg) && (WRITE_VERBS.test(ctx.segmentLower) || INPLACE.test(ctx.segmentLower));
     const targets = verbWrite ? ctx.paths.filter((p) => isUserLevel(p, ctx.projectDir)) : [];
     for (const r of redirected) if (!targets.includes(r)) targets.push(r);
     if (!targets.length) return null;

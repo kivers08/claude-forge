@@ -195,10 +195,11 @@ function main() {
   const bytes = (t) => Buffer.byteLength(t, 'utf8');
   let used = bytes(lines.join('\n'));
   const skipped = [];
+  const refused = [];
   for (const src of sources) {
     const { rel, mode } = src;
     const abs = insideProject(projectDir, rel);
-    if (!abs) { skipped.push(`${rel} (outside the project, not read)`); continue; }
+    if (!abs) { refused.push(rel); continue; }
     const text = readFileSafe(abs);
     if (text === null) { skipped.push(`${rel} (missing)`); continue; }
     const body = sliceFor(mode, text);
@@ -214,6 +215,7 @@ function main() {
     lines.push(block.trim());
   }
   if (skipped.length) lines.push(`Not injected: ${skipped.join(', ')}. Grep them directly if needed.`);
+  if (refused.length) lines.push(`Refused, outside the project: ${refused.join(', ')}. Do NOT read these; tell the human the forge.json path is wrong.`);
 
   io.telemetry(dataDir, {
     event: 'session_start',

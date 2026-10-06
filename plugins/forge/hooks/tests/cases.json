@@ -130,6 +130,11 @@
     "command": "bash -c \"echo x > ~/.claude/settings.json\"",
     "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
 
+  { "name": "user-level-write: cosmetic quotes inside the path do not dodge the redirect check",
+    "script": "hooks/pre-bash.js", "payload": "payloads/pre-bash-linux.json",
+    "command": "echo x >& \"$HOME\"/.clau\"\"de/settings.json",
+    "expect": { "exit": 0, "deny": true, "stdoutIncludes": "machine-wide" } },
+
   { "name": "user-level-write: Write tool into ~/.claude is denied",
     "script": "hooks/pre-write.js", "payload": "payloads/pre-write-linux.json",
     "filePath": "{{HOME}}/.claude/settings.json",
@@ -351,7 +356,19 @@
     "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
     "fixture": "fixtures/hubs",
     "forgeConfig": { "taskFiles": { "handoff": "../../../../etc/hostname" } },
-    "expect": { "exit": 0, "stdoutIncludes": "outside the project, not read" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: ../../../../etc/hostname. Do NOT read" } },
+
+  { "name": "session-start: an absolute handoff path is refused",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs",
+    "forgeConfig": { "taskFiles": { "handoff": "/etc/hostname" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: /etc/hostname" } },
+
+  { "name": "session-start: a handoff symlinked to a file outside the project is refused, its text never injected",
+    "script": "hooks/session-start.js", "payload": "payloads/session-start-fixture.json",
+    "fixture": "fixtures/hubs", "symlink": { "path": "docs/escape.md", "target": "{{OUTSIDE}}" },
+    "forgeConfig": { "taskFiles": { "handoff": "docs/escape.md" } },
+    "expect": { "exit": 0, "stdoutIncludes": "Refused, outside the project: docs/escape.md", "stdoutExcludes": "OUTSIDE-SECRET-MARKER" } },
 
   { "name": "stop git-check: blocks on uncommitted work",
     "script": "hooks/stop-git-check.js", "payload": "payloads/stop-fixture.json",
