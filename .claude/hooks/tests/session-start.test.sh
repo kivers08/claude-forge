@@ -43,16 +43,13 @@ run_case() {
 # Not remote: no-op, no claude calls at all.
 run_case "non-remote is a no-op" "" "0" 0 0
 
-# Remote, everything succeeds: marketplace add + the forge install (smoke is
-# never installed by this hook, opusjevos D-BU).
-run_case "remote success calls marketplace add and forge install only" "true" "0" 0 2
+# Remote, everything succeeds: marketplace add + both plugin installs.
+run_case "remote success calls all three" "true" "0" 0 3
 
 # Remote, marketplace add fails: aborts before either install.
 run_case "marketplace failure aborts before installs" "true" "1" 1 1
 
-# Remote, marketplace add ok, forge install fails: exit 1.
-run_case "forge install failure exits non-zero" "true" "0 1" 1 2
-
-if grep -v '^#' "$HOOK" | grep -q 'install smoke@'; then echo "FAIL: hook still mentions the smoke plugin"; fail=1; else echo "PASS: hook does not install smoke"; fi
+# Remote, marketplace add ok, forge install fails: smoke install still runs, exit 1.
+run_case "one plugin install failing doesn't block the other" "true" "0 1 0" 1 3
 
 exit "$fail"
